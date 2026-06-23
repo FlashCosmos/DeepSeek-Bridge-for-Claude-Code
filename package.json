@@ -1,0 +1,73 @@
+{
+  "name": "deepseek-bridge",
+  "displayName": "DeepSeek Bridge",
+  "description": "Let Claude Code offload token-heavy, file-based chores to DeepSeek — sandboxed, cheaper, you stay in control.",
+  "version": "1.0.0",
+  "publisher": "your-publisher-id",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["AI", "Machine Learning", "Other"],
+  "keywords": ["deepseek", "claude", "claude code", "mcp", "ai agent", "token saving"],
+  "galleryBanner": {
+    "color": "#3A4ECE",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/issues"
+  },
+  "homepage": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge#readme",
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deepseek-bridge-container",
+          "title": "DeepSeek Bridge",
+          "icon": "media/deepseek.svg"
+        }
+      ]
+    },
+    "views": {
+      "deepseek-bridge-container": [
+        {
+          "type": "webview",
+          "id": "deepseek-bridge.config",
+          "name": "Configuration"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "deepseek-bridge.openSidebar",
+        "title": "DeepSeek Bridge: Open Settings"
+      }
+    ]
+  },
+  "scripts": {
+    "bundle:ext": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --platform=node --target=node20 --format=cjs --minify --conditions=require",
+    "bundle:server": "esbuild src/server.ts --bundle --outfile=out/server.js --platform=node --target=node20 --format=cjs --minify --conditions=require",
+    "bundle": "npm run bundle:ext && npm run bundle:server",
+    "watch": "npm run bundle:ext -- --watch & npm run bundle:server -- --watch",
+    "package": "npm run bundle && vsce package --no-dependencies",
+    "vscode:prepublish": "npm run bundle"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "openai": "^4.0.0"
+  }
+}
