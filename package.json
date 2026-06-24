@@ -9,6 +9,7 @@
   "engines": {
     "vscode": "^1.100.0"
   },
+  "extensionKind": ["workspace"],
   "categories": ["AI", "Machine Learning", "Other"],
   "keywords": ["deepseek", "claude", "claude code", "mcp", "ai agent", "token saving"],
   "galleryBanner": {
