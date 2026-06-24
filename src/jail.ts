@@ -17,6 +17,9 @@ export const DEFAULT_DENY: RegExp[] = [
     /\.(pem|key|pfx|p12|kdbx|ppk)$/i,
     /(^|[\\/])Startup([\\/]|$)/i,
     /Microsoft\.PowerShell_profile\.ps1$/i,
+    /(^|[\\/])auth\.json$/i,           // Composer credentials
+    /(^|[\\/])storage[\\/]logs([\\/]|$)/i,  // may contain PII
+    /\.sqlite\d*$/i,                   // SQLite databases
 ];
 
 export interface Jail {
