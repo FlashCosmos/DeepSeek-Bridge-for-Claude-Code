@@ -1,18 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { execFileSync } from 'child_process';
-
-function resolveNodePath(): string {
-    try {
-        const cmd = process.platform === 'win32' ? 'where' : 'which';
-        const result = execFileSync(cmd, ['node'], { encoding: 'utf8' }).trim();
-        const first = result.split('\n')[0].trim();
-        // Only normalize separators on Windows; POSIX paths must keep forward slashes.
-        if (first) return process.platform === 'win32' ? first.replace(/\//g, '\\') : first;
-    } catch { /* fall through */ }
-    return 'node';
-}
 
 export function writeMcpConfig(
     context: vscode.ExtensionContext,
@@ -22,7 +10,6 @@ export function writeMcpConfig(
 ): void {
     const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
     const serverPath = path.join(context.extensionUri.fsPath, 'out', 'server.js');
-    const nodePath = resolveNodePath();
 
     // ~/.claude.json — the file Claude Code actually reads for user-level MCP servers
     const claudeJsonPath = path.join(home, '.claude.json');
@@ -37,7 +24,7 @@ export function writeMcpConfig(
     claudeJson.mcpServers = {
         ...existingServers,
         deepseek: {
-            command: nodePath,
+            command: 'node',
             args: [serverPath],
             env: {
                 DEEPSEEK_API_KEY: apiKey,
