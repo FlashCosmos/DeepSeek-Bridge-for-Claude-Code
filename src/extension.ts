@@ -49,11 +49,11 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
             { label: '$(star-full) Always allow',   description: 'Add to permanent allowlist',          action: 'always'  },
             { label: '$(x) Deny',                   description: 'Block this command',                  action: 'deny'    },
         ];
-        const cmdLabel = command.length > 80 ? command.slice(0, 77) + '…' : command;
+        const cmdLabel = command.length > 60 ? command.slice(0, 57) + '…' : command;
         const picked = await vscode.window.showQuickPick(items, {
-            title:           `DeepSeek: Allow command?`,
-            placeHolder:     cmdLabel,
-            ignoreFocusOut:  true,
+            title:          `DeepSeek wants to run: ${cmdLabel}`,
+            placeHolder:    'Select an action…',
+            ignoreFocusOut: true,
         });
 
         const action   = picked?.action ?? 'deny';
