@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execSync } from 'child_process';
 import { DeepSeekSidebarProvider } from './sidebar';
 import { writeMcpConfig } from './config';
 import { isWorkspaceEnabled } from './control';
@@ -51,7 +52,17 @@ function extractExecutable(segment: string): string {
     return tokens[0] ?? segment;
 }
 
-interface ScopeOption { prefix: string; label: string; detail: string; }
+interface ScopeOption { prefix: string; label: string; detail: string; inPath: boolean; }
+
+// Check if an executable name is findable on the system PATH.
+function isInPath(exe: string): boolean {
+    if (!exe || exe.includes('/') || exe.includes('\\')) return false;
+    try {
+        const cmd = process.platform === 'win32' ? `where "${exe}"` : `which "${exe}"`;
+        execSync(cmd, { stdio: 'pipe', timeout: 2000 });
+        return true;
+    } catch { return false; }
+}
 
 // Build the list of scope options: exact full command + deduplicated executables.
 function buildScopeOptions(command: string): ScopeOption[] {
@@ -59,13 +70,13 @@ function buildScopeOptions(command: string): ScopeOption[] {
     const seen = new Set<string>();
 
     const display = command.length > 55 ? command.slice(0, 52) + '…' : command;
-    options.push({ prefix: command, label: `$(terminal) ${display}`, detail: 'Exact command only' });
+    options.push({ prefix: command, label: `$(terminal) ${display}`, detail: 'Exact command only', inPath: true });
 
     for (const seg of parseSegments(command)) {
         const exe = extractExecutable(seg);
         if (exe && !seen.has(exe)) {
             seen.add(exe);
-            options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command` });
+            options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command`, inPath: isInPath(exe) });
         }
     }
 
@@ -107,7 +118,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         }
 
         // Reveal the sidebar and show the approval card.
-        const scopes = buildScopeOptions(command).map(o => ({ prefix: o.prefix, detail: o.detail }));
+        const scopes = buildScopeOptions(command).map(o => ({ prefix: o.prefix, detail: o.detail, inPath: o.inPath }));
         await vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
         provider.setBadge(1);
 

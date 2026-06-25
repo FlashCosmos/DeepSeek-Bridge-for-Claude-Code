@@ -190,6 +190,20 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                     fs.writeFileSync(killFile, '1', 'utf8');
                 } catch { /* non-fatal */ }
             }
+
+            if (msg.type === 'validateCommands') {
+                const cmds = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
+                const { execSync: execSyncV } = await import('child_process');
+                const results = cmds.map(cmd => {
+                    const exe = cmd.split(/\s+/)[0] ?? cmd;
+                    try {
+                        const check = process.platform === 'win32' ? `where "${exe}"` : `which "${exe}"`;
+                        execSyncV(check, { stdio: 'pipe', timeout: 2000 });
+                        return { cmd, inPath: true };
+                    } catch { return { cmd, inPath: false }; }
+                });
+                webviewView.webview.postMessage({ type: 'validateResults', results });
+            }
         }, undefined, this.context.subscriptions);
     }
 
@@ -639,7 +653,10 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       <ul class="cmd-list" id="cmdList">
         <li><p class="cmd-empty">No commands — DeepSeek will prompt for each.</p></li>
       </ul>
-      <p class="hint">Prefix approved — "node" allows all node commands.</p>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+        <p class="hint" style="margin:0">Prefix approved — "node" allows all node commands.</p>
+        <button class="btn-refresh" id="validateCmdsBtn" title="Check which commands are not found in PATH">⚑ Validate</button>
+      </div>
     </div>
 
     <hr class="divider">
@@ -723,17 +740,25 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const safe      = esc(s.prefix);
       const detail    = esc(s.detail);
       const alreadyOk = currentAllowCommands.includes(s.prefix);
-      return \`<label class="scope-option\${i === 0 ? ' selected' : ''}">
+      const notInPath = i > 0 && s.inPath === false;   // only warn on executable rows, not exact cmd
+      // Default checked: first row always; others only if already approved
+      const checked   = i === 0 || alreadyOk;
+      const extraNote = alreadyOk
+        ? ' <span style="color:#3fb950;font-size:10px">✓ already approved</span>'
+        : notInPath
+          ? ' <span style="color:#e2a730;font-size:10px" title="Not found in PATH — may not be a real shell command">⚠ not in PATH</span>'
+          : '';
+      return \`<label class="scope-option\${checked ? ' selected' : ''}">
   <div class="scope-row">
-    <input type="checkbox" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
-    <span class="scope-prefix">\${safe}</span>
+    <input type="checkbox" name="scope" value="\${safe}" \${checked ? 'checked' : ''}>
+    <span class="scope-prefix"\${notInPath ? ' style="opacity:0.55"' : ''}>\${safe}</span>
     <select class="scope-dur" data-idx="\${i}">
       <option value="once"\${alreadyOk ? '' : ' selected'}>Once</option>
       <option value="session">Session</option>
       <option value="always"\${alreadyOk ? ' selected' : ''}>Always</option>
     </select>
   </div>
-  <div class="scope-detail">\${detail}\${alreadyOk ? ' <span style="color:#3fb950;font-size:10px">✓ already approved</span>' : ''}</div>
+  <div class="scope-detail">\${detail}\${extraNote}</div>
 </label>\`;
     }).join('');
 
@@ -817,6 +842,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       stopBtn.classList.toggle('running', !!msg.running);
       stopBtn.title = msg.running ? 'Stop running DeepSeek task' : 'No task running';
     }
+
+    if (msg.type === 'validateResults') {
+      validateCmdsBtn.textContent = '⚑ Validate';
+      validationResults = {};
+      (msg.results || []).forEach(r => { validationResults[r.cmd] = r.inPath; });
+      renderCommands(currentAllowCommands);
+    }
   });
 
   // ── Allowed commands (ZooCode style) ──────────────────────────────────────
@@ -827,10 +859,15 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     cmdList.innerHTML = commands.map(cmd => {
-      const safe = esc(cmd);
+      const safe    = esc(cmd);
+      const inPath  = validationResults ? validationResults[cmd] : null;
+      const warnBadge = inPath === false
+        ? '<span style="color:#e2a730;font-size:10px;margin-left:3px" title="Not found in PATH — may not be a real command">⚠</span>'
+        : '';
       return \`<li class="cmd-item" data-cmd="\${safe}">
         <span class="cmd-check">✓</span>
-        <span class="cmd-text" title="\${safe}">\${safe}</span>
+        <span class="cmd-text" title="\${safe}"\${inPath === false ? ' style="opacity:0.55"' : ''}>\${safe}</span>
+        \${warnBadge}
         <button class="cmd-edit" title="Edit">✏</button>
         <button class="cmd-del" title="Remove">✕</button>
       </li>\`;
@@ -898,6 +935,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   addCmdBtn.addEventListener('click', addCommand);
   addCmdInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCommand(); });
+
+  const validateCmdsBtn = document.getElementById('validateCmdsBtn');
+  let validationResults = null;
+  validateCmdsBtn.addEventListener('click', () => {
+    validateCmdsBtn.textContent = '…';
+    vscode.postMessage({ type: 'validateCommands' });
+  });
 
   const fullPermsToggle = document.getElementById('fullPerms');
   fullPermsToggle.addEventListener('change', () => {
