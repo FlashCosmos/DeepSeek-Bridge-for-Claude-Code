@@ -29,11 +29,12 @@ function segmentMatchesPrefix(segment: string, prefix: string): boolean {
     return segment === prefix || segment.startsWith(prefix + ' ');
 }
 
-// Split on shell operators and require every segment to match a session-approved
-// prefix — same logic as server-side to prevent chain exploitation.
+// Split on unambiguous shell operators and require every segment to match a
+// session-approved prefix. Bare | is excluded — see commandMatchesAllowlist
+// in server.ts for the full rationale.
 function isSessionApproved(command: string): boolean {
     const prefixes = [...sessionApproved];
-    const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/).map(s => s.trim()).filter(Boolean);
+    const segments = command.split(/\s*(?:&&|\|\||;)\s*/).map(s => s.trim()).filter(Boolean);
     return segments.every(seg => prefixes.some(p => segmentMatchesPrefix(seg, p)));
 }
 

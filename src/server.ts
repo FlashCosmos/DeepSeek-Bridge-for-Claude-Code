@@ -93,12 +93,14 @@ function segmentMatchesEntry(segment: string, entry: string): boolean {
     return segment === entry || segment.startsWith(entry + ' ');
 }
 
-// Split a chained command on shell operators and require EVERY segment to match
-// an allowlist entry. Prevents "node good && rm -rf /" from being approved via
-// the "node" prefix.
+// Split a chained command on unambiguous shell operators and require EVERY segment
+// to match an allowlist entry. Prevents "node good && rm -rf /" being approved
+// via the "node" prefix. Bare | is intentionally excluded — it appears inside
+// quoted arguments (e.g. powershell -Command "... | Select-String") and does not
+// introduce a new top-level command the way && or ; does.
 function commandMatchesAllowlist(command: string, list: Iterable<string>): boolean {
     const entries = [...list];
-    const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/).map(s => s.trim()).filter(Boolean);
+    const segments = command.split(/\s*(?:&&|\|\||;)\s*/).map(s => s.trim()).filter(Boolean);
     return segments.every(seg => entries.some(entry => segmentMatchesEntry(seg, entry)));
 }
 
@@ -526,17 +528,33 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
     let finalSummary = '';
 
     for (let i = 0; i < LIMITS.maxIterations; i++) {
-        // Abort if the user clicked Stop in the sidebar.
-        try {
-            if (fs.existsSync(KILL_FILE)) { fs.unlinkSync(KILL_FILE); throw new Error('__killed__'); }
-        } catch (e) { if ((e as Error).message === '__killed__') throw e; }
+        // Check kill file before starting the API call.
+        if (fs.existsSync(KILL_FILE)) { try { fs.unlinkSync(KILL_FILE); } catch {} throw new Error('__killed__'); }
 
-        const response = await client.chat.completions.create({
-            model: MODEL,
-            messages,
-            tools,
-            max_tokens: 8192
-        });
+        // Poll the kill file every 500 ms while the API call is in flight so
+        // Stop takes effect immediately rather than waiting for DeepSeek to respond.
+        const ctrl      = new AbortController();
+        const killPoll  = setInterval(() => {
+            try {
+                if (fs.existsSync(KILL_FILE)) { fs.unlinkSync(KILL_FILE); ctrl.abort(); }
+            } catch {}
+        }, 500);
+
+        let response: Awaited<ReturnType<typeof client.chat.completions.create>>;
+        try {
+            response = await client.chat.completions.create({
+                model: MODEL,
+                messages,
+                tools,
+                max_tokens: 8192,
+                signal: ctrl.signal,
+            });
+        } catch (e) {
+            clearInterval(killPoll);
+            if (ctrl.signal.aborted) throw new Error('__killed__');
+            throw e;
+        }
+        clearInterval(killPoll);
 
         if (response.usage) {
             totalInputTokens  += response.usage.prompt_tokens;

@@ -722,6 +722,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   stopBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'stopTask' });
+    // Dismiss any pending approval so the loop can reach the kill-file check.
+    if (approvalOverlay.style.display !== 'none') {
+      vscode.postMessage({ type: 'approvalDeny' });
+      hideApproval();
+    }
   });
 
   let selectedScopes = new Set();
