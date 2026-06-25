@@ -120,7 +120,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 if (!cmd) return;
                 const existing = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
                 if (existing.includes(cmd)) return;
-                const updated = [...existing, cmd];
+                const updated = [...existing, cmd].sort((a, b) => a.localeCompare(b));
                 await this.saveAllowCommands(updated);
                 webviewView.webview.postMessage({ type: 'allowCommandsUpdate', commands: updated });
             }

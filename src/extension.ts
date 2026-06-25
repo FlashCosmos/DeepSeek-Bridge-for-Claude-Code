@@ -117,7 +117,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
             const existing = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
             const toAdd    = chosenPrefixes.filter(p => !existing.includes(p));
             if (toAdd.length) {
-                const updated = [...existing, ...toAdd];
+                const updated = [...existing, ...toAdd].sort((a, b) => a.localeCompare(b));
                 await context.globalState.update('deepseek-allow-commands', updated);
                 const apiKey  = await context.secrets.get('deepseek-api-key');
                 const model   = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';

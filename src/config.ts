@@ -36,4 +36,12 @@ export function writeMcpConfig(
         }
     };
     fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2));
+
+    // Also write a dynamic allowlist file so the running MCP server process
+    // can re-read it on every call without needing an env-var restart.
+    const allowlistPath = path.join(home, '.claude', 'deepseek-allowlist.json');
+    try {
+        fs.mkdirSync(path.dirname(allowlistPath), { recursive: true });
+        fs.writeFileSync(allowlistPath, JSON.stringify(allowCommands));
+    } catch { /* non-fatal */ }
 }

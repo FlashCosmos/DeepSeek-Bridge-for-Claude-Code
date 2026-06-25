@@ -29,6 +29,18 @@ try {
 
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
 const HISTORY_FILE       = path.join(os.homedir(), '.claude', 'deepseek-history.json');
+const ALLOWLIST_FILE     = path.join(os.homedir(), '.claude', 'deepseek-allowlist.json');
+
+// Re-read the dynamic allowlist written by the extension on every call so
+// "Always allow" approvals persist across MCP server restarts without needing
+// a full Claude Code restart to pick up the new env var.
+function getDynamicAllowlist(): string[] {
+    try {
+        const raw    = fs.readFileSync(ALLOWLIST_FILE, 'utf8');
+        const parsed = JSON.parse(raw) as unknown;
+        return Array.isArray(parsed) ? (parsed as string[]).filter(s => typeof s === 'string') : [];
+    } catch { return []; }
+}
 
 // ── Cost tracking ──────────────────────────────────────────────────────────────
 
@@ -323,6 +335,7 @@ async function toolRunCommand(args: Record<string, unknown>): Promise<string> {
 
     const preApproved =
         commandMatchesAllowlist(command, ALLOW_COMMANDS) ||
+        commandMatchesAllowlist(command, getDynamicAllowlist()) ||
         commandMatchesAllowlist(command, sessionApproved);
 
     if (!preApproved) {
