@@ -13,15 +13,16 @@ const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-p
 // A prefix like "node" matches "node --version", "node script.js", etc.
 const sessionApproved = new Set<string>();
 
-function commandMatchesPrefix(command: string, prefix: string): boolean {
-    return command === prefix || command.startsWith(prefix + ' ');
+function segmentMatchesPrefix(segment: string, prefix: string): boolean {
+    return segment === prefix || segment.startsWith(prefix + ' ');
 }
 
+// Split on shell operators and require every segment to match a session-approved
+// prefix — same logic as server-side to prevent chain exploitation.
 function isSessionApproved(command: string): boolean {
-    for (const prefix of sessionApproved) {
-        if (commandMatchesPrefix(command, prefix)) return true;
-    }
-    return false;
+    const prefixes = [...sessionApproved];
+    const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/).map(s => s.trim()).filter(Boolean);
+    return segments.every(seg => prefixes.some(p => segmentMatchesPrefix(seg, p)));
 }
 
 // Split a shell command string on operators into individual segments.

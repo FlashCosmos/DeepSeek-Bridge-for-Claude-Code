@@ -33,11 +33,17 @@ const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-p
 // A prefix like "node" matches "node --version", "node script.js", etc.
 const sessionApproved = new Set<string>();
 
+function segmentMatchesEntry(segment: string, entry: string): boolean {
+    return segment === entry || segment.startsWith(entry + ' ');
+}
+
+// Split a chained command on shell operators and require EVERY segment to match
+// an allowlist entry. Prevents "node good && rm -rf /" from being approved via
+// the "node" prefix.
 function commandMatchesAllowlist(command: string, list: Iterable<string>): boolean {
-    for (const entry of list) {
-        if (command === entry || command.startsWith(entry + ' ')) return true;
-    }
-    return false;
+    const entries = [...list];
+    const segments = command.split(/\s*(?:&&|\|\||;|\|)\s*/).map(s => s.trim()).filter(Boolean);
+    return segments.every(seg => entries.some(entry => segmentMatchesEntry(seg, entry)));
 }
 
 async function requestCommandApproval(command: string): Promise<boolean> {
