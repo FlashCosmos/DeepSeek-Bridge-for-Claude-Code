@@ -29,13 +29,9 @@ try {
 
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
 
-// Commands approved via popup this MCP session (prefix-keyed, mirrors extension-side cache).
+// Prefixes approved via popup this MCP session (mirrors extension-side cache).
+// A prefix like "node" matches "node --version", "node script.js", etc.
 const sessionApproved = new Set<string>();
-
-function extractPrefix(command: string): string {
-    const idx = command.indexOf(' --');
-    return idx >= 0 ? command.slice(0, idx).trim() : command;
-}
 
 function commandMatchesAllowlist(command: string, list: Iterable<string>): boolean {
     for (const entry of list) {
@@ -65,10 +61,10 @@ async function requestCommandApproval(command: string): Promise<boolean> {
             res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
             res.on('end', () => {
                 try {
-                    const { decision } = JSON.parse(data) as { decision: string };
-                    if (decision === 'allow') {
-                        // Mirror the session approval so repeated calls skip the popup.
-                        sessionApproved.add(extractPrefix(command));
+                    const { decision, approvedPrefix } = JSON.parse(data) as { decision: string; approvedPrefix?: string };
+                    if (decision === 'allow' && approvedPrefix) {
+                        // Mirror the approved prefix so repeated calls skip the popup.
+                        sessionApproved.add(approvedPrefix);
                     }
                     resolve(decision === 'allow');
                 } catch { resolve(false); }
