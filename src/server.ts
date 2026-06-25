@@ -377,25 +377,24 @@ function agentTools(policy: CallPolicy): OpenAI.Chat.ChatCompletionTool[] {
             }
         });
     }
-    if (ALLOW_COMMANDS.length > 0) {
-        tools.push({
-            type: 'function',
-            function: {
-                name: 'run_command',
-                description:
-                    'Run an allowlisted shell command in the workspace root for self-verification. ' +
-                    `Allowed: ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}. ` +
-                    'Extra arguments are permitted after the listed prefix. No arbitrary shell.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        command: { type: 'string', description: 'Command to run — must start with an allowed prefix' }
-                    },
-                    required: ['command']
-                }
+    tools.push({
+        type: 'function',
+        function: {
+            name: 'run_command',
+            description:
+                'Run a shell command in the workspace root for self-verification (e.g. run tests, lint, type-check). ' +
+                (ALLOW_COMMANDS.length
+                    ? `Pre-approved prefixes (no popup): ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}. Other commands will prompt the user for approval.`
+                    : 'All commands will prompt the user for approval before running.'),
+            parameters: {
+                type: 'object',
+                properties: {
+                    command: { type: 'string', description: 'Command to run' }
+                },
+                required: ['command']
             }
-        });
-    }
+        }
+    });
 
     return tools;
 }
@@ -529,9 +528,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 'Delegate an autonomous file-based coding chore to DeepSeek to save Claude tokens. ' +
                 `Confined to the workspace (${ROOT}). No network; secret files are blocked. ` +
                 `Server max posture: ${MAX_POSTURE}. ` +
-                (ALLOW_COMMANDS.length
-                    ? `Shell self-verify enabled — allowed: ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}. `
-                    : 'No shell access. ') +
+                'Shell self-verify available — commands prompt the user for approval unless pre-approved in the sidebar. ' +
                 'Returns a structured manifest (created/modified/skipped files) plus a prose summary. ' +
                 'Use for: refactors, codegen, multi-file edits, analysis, summarization of large file sets.',
             inputSchema: {
