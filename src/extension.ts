@@ -44,10 +44,10 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
 
         interface ApprovalItem extends vscode.QuickPickItem { action: 'once' | 'session' | 'always' | 'deny'; }
         const items: ApprovalItem[] = [
-            { label: '$(check)     Allow once',          description: 'Run this time — ask again next time',     action: 'once'    },
-            { label: '$(clock)     Allow this session',  description: 'Auto-approve until VS Code restarts',     action: 'session' },
-            { label: '$(star-full) Always allow',        description: 'Add to permanent allowlist',              action: 'always'  },
-            { label: '$(x)         Deny',                description: 'Block this command',                      action: 'deny'    },
+            { label: '$(check) Allow once',         description: 'Run this time — ask again next time', action: 'once'    },
+            { label: '$(clock) Allow this session', description: 'Auto-approve until VS Code restarts', action: 'session' },
+            { label: '$(star-full) Always allow',   description: 'Add to permanent allowlist',          action: 'always'  },
+            { label: '$(x) Deny',                   description: 'Block this command',                  action: 'deny'    },
         ];
         const cmdLabel = command.length > 80 ? command.slice(0, 77) + '…' : command;
         const picked = await vscode.window.showQuickPick(items, {
