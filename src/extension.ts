@@ -9,6 +9,7 @@ import { isWorkspaceEnabled } from './control';
 
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
 const HISTORY_FILE       = path.join(os.homedir(), '.claude', 'deepseek-history.json');
+const KILL_FILE          = path.join(os.homedir(), '.claude', 'deepseek-kill');
 
 function readHistory(): { version: number; entries: unknown[] } {
     try {
@@ -73,6 +74,19 @@ function buildScopeOptions(command: string): ScopeOption[] {
 
 async function startApprovalServer(context: vscode.ExtensionContext, provider: import('./sidebar').DeepSeekSidebarProvider): Promise<void> {
     const server = http.createServer(async (req, res) => {
+        // Task running/stopped notification from server.ts → forward to sidebar.
+        if (req.method === 'POST' && req.url === '/running') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            await new Promise<void>(r => req.on('end', r));
+            try {
+                const { running } = JSON.parse(body) as { running: boolean };
+                provider.postTaskRunning(running);
+            } catch {}
+            res.writeHead(200).end();
+            return;
+        }
+
         if (req.method !== 'POST' || req.url !== '/approve') {
             res.writeHead(404).end();
             return;

@@ -30,6 +30,7 @@ try {
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
 const HISTORY_FILE       = path.join(os.homedir(), '.claude', 'deepseek-history.json');
 const ALLOWLIST_FILE     = path.join(os.homedir(), '.claude', 'deepseek-allowlist.json');
+const KILL_FILE          = path.join(os.homedir(), '.claude', 'deepseek-kill');
 
 // Re-read the dynamic allowlist written by the extension on every call so
 // "Always allow" approvals persist across MCP server restarts without needing
@@ -137,6 +138,21 @@ async function requestCommandApproval(command: string): Promise<boolean> {
         req.write(body);
         req.end();
     });
+}
+
+// Fire-and-forget: tell the extension's sidebar whether a task is running.
+function notifyRunning(running: boolean): void {
+    let port = 0;
+    try { port = parseInt(fs.readFileSync(APPROVAL_PORT_FILE, 'utf8').trim(), 10); } catch { return; }
+    if (!port || isNaN(port)) return;
+    const body = JSON.stringify({ running });
+    const req = http.request({
+        hostname: '127.0.0.1', port, path: '/running', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => { res.resume(); });
+    req.on('error', () => {});
+    req.write(body);
+    req.end();
 }
 
 const WORKSPACE_RAW =
@@ -510,6 +526,11 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
     let finalSummary = '';
 
     for (let i = 0; i < LIMITS.maxIterations; i++) {
+        // Abort if the user clicked Stop in the sidebar.
+        try {
+            if (fs.existsSync(KILL_FILE)) { fs.unlinkSync(KILL_FILE); throw new Error('__killed__'); }
+        } catch (e) { if ((e as Error).message === '__killed__') throw e; }
+
         const response = await client.chat.completions.create({
             model: MODEL,
             messages,
@@ -693,7 +714,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             dryRun:     a['dryRun'] === true,
         };
 
-        const result = await runAgentLoop(prompt, policy);
+        notifyRunning(true);
+        let result: AgentResult;
+        try {
+            result = await runAgentLoop(prompt, policy);
+        } catch (e) {
+            notifyRunning(false);
+            if ((e as Error).message === '__killed__') {
+                return { content: [{ type: 'text' as const, text: 'Task stopped by user.' }] };
+            }
+            throw e;
+        }
+        notifyRunning(false);
 
         // Structured manifest first so the orchestrator can parse programmatically.
         const manifestObj: Record<string, unknown> = {};

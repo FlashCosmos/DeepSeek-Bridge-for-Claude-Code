@@ -26,6 +26,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         this.webviewView?.webview.postMessage({ type: 'allowCommandsUpdate', commands });
     }
 
+    /** Notify the sidebar whether a DeepSeek task is currently running. */
+    postTaskRunning(running: boolean): void {
+        this.webviewView?.webview.postMessage({ type: 'taskRunning', running });
+    }
+
     /** Show the approval card in the sidebar. Resolves when user responds. */
     async requestApproval(
         command: string,
@@ -166,6 +171,14 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                     this.pendingApproval(null);
                     this.pendingApproval = null;
                 }
+            }
+
+            if (msg.type === 'stopTask') {
+                try {
+                    const killFile = path.join(os.homedir(), '.claude', 'deepseek-kill');
+                    fs.mkdirSync(path.dirname(killFile), { recursive: true });
+                    fs.writeFileSync(killFile, '1', 'utf8');
+                } catch { /* non-fatal */ }
             }
         }, undefined, this.context.subscriptions);
     }
@@ -380,6 +393,19 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
     .btn-refresh:hover { opacity: 1; }
 
+    /* ── Stop button ──────────────────────────────────────── */
+    .btn-stop {
+      margin-left: auto; padding: 3px 9px;
+      background: rgba(241,76,76,0.10);
+      color: #f14c4c;
+      border: 1px solid rgba(241,76,76,0.25);
+      border-radius: 3px; font-family: inherit; font-size: 11px;
+      cursor: pointer; opacity: 0.4; transition: opacity 0.15s, background 0.15s;
+      align-self: center; margin-bottom: 2px; flex-shrink: 0;
+    }
+    .btn-stop.running { opacity: 1; background: rgba(241,76,76,0.18); border-color: rgba(241,76,76,0.5); }
+    .btn-stop:hover { opacity: 1; }
+
     /* ── Config panel ──────────────────────────────────────── */
     .status-bar {
       display: flex; align-items: center; gap: 8px;
@@ -504,6 +530,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="config">Config</button>
     <button class="tab-btn" data-tab="history">History</button>
+    <button class="btn-stop" id="stopBtn" title="No task running">⬛ Stop</button>
   </div>
 
   <!-- Approval card (shown when DeepSeek needs permission) -->
@@ -649,6 +676,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   const approvalScopes  = document.getElementById('approvalScopes');
   const allowBtn        = document.getElementById('allowBtn');
   const denyBtn         = document.getElementById('denyBtn');
+  const stopBtn         = document.getElementById('stopBtn');
+
+  stopBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'stopTask' });
+  });
 
   let selectedScopes = new Set();
 
@@ -748,6 +780,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     if (msg.type === 'historyData') {
       historyEntries = msg.entries || [];
       renderHistory();
+    }
+
+    if (msg.type === 'taskRunning') {
+      stopBtn.classList.toggle('running', !!msg.running);
+      stopBtn.title = msg.running ? 'Stop running DeepSeek task' : 'No task running';
     }
   });
 
