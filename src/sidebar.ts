@@ -222,9 +222,10 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     #approvalScopes { padding: 4px 10px 8px; display: flex; flex-direction: column; gap: 2px; }
 
     .scope-option {
-      display: flex; align-items: flex-start; gap: 8px;
+      display: block;
       padding: 6px 8px; border-radius: 4px; cursor: pointer;
       border: 1px solid transparent;
+      color: var(--vscode-foreground);
       transition: background 0.1s;
     }
     .scope-option:hover { background: var(--vscode-list-hoverBackground); }
@@ -232,13 +233,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       background: rgba(0, 122, 204, 0.10);
       border-color: rgba(0, 122, 204, 0.35);
     }
-    .scope-option input[type="radio"] { margin-top: 2px; flex-shrink: 0; accent-color: var(--vscode-focusBorder, #007acc); }
-    .scope-content { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; overflow: hidden; }
+    .scope-row {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .scope-option input[type="radio"] { flex-shrink: 0; accent-color: var(--vscode-focusBorder, #007acc); margin: 0; }
     .scope-prefix {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11.5px; word-break: break-all;
+      color: var(--vscode-foreground);
     }
-    .scope-detail { font-size: 10.5px; opacity: 0.55; }
+    .scope-detail { font-size: 10.5px; opacity: 0.55; padding-left: 20px; margin-top: 2px; color: var(--vscode-foreground); }
 
     .dur-row { display: flex; gap: 4px; padding: 4px 10px 10px; }
     .dur-btn {
@@ -527,11 +531,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const safe   = esc(s.prefix);
       const detail = esc(s.detail);
       return \`<label class="scope-option\${i === 0 ? ' selected' : ''}">
-        <input type="radio" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
-        <div class="scope-content">
+        <div class="scope-row">
+          <input type="radio" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
           <span class="scope-prefix">\${safe}</span>
-          <span class="scope-detail">\${detail}</span>
         </div>
+        <div class="scope-detail">\${detail}</div>
       </label>\`;
     }).join('');
 
