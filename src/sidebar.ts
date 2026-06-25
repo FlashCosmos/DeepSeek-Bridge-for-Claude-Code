@@ -307,7 +307,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
     .input-row { display: flex; gap: 4px; }
 
-    input, select {
+    input[type="text"], input[type="password"], select {
       width: 100%; padding: 6px 8px;
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
@@ -315,7 +315,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       border-radius: 3px; font-family: inherit; font-size: inherit;
       outline: none; appearance: none;
     }
-    input:focus, select:focus { border-color: var(--vscode-focusBorder); }
+    input[type="text"]:focus, input[type="password"]:focus, select:focus { border-color: var(--vscode-focusBorder); }
+    input[type="radio"] { width: auto; padding: 0; flex-shrink: 0; }
     input[type="password"], input[type="text"] {
       font-family: var(--vscode-editor-font-family, monospace);
       letter-spacing: 0.02em;
