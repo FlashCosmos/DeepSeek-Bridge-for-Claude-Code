@@ -141,6 +141,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 webviewView.webview.postMessage({ type: 'allowCommandsUpdate', commands: updated });
             }
 
+            if (msg.type === 'editCommand') {
+                const oldCmd = ((msg as unknown as Record<string, string>)['oldCommand'] ?? '').trim();
+                const newCmd = ((msg as unknown as Record<string, string>)['newCommand'] ?? '').trim();
+                if (!newCmd || oldCmd === newCmd) return;
+                const existing = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
+                const updated = [...existing.filter(c => c !== oldCmd), newCmd].sort((a, b) => a.localeCompare(b));
+                await this.saveAllowCommands(updated);
+                webviewView.webview.postMessage({ type: 'allowCommandsUpdate', commands: updated });
+            }
+
             if (msg.type === 'approvalResponse') {
                 if (this.pendingApproval) {
                     this.pendingApproval({
@@ -512,12 +522,27 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       flex: 1; font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .cmd-edit {
+      background: none; border: none; cursor: pointer;
+      opacity: 0.3; font-size: 11px; padding: 0 2px;
+      color: inherit; flex-shrink: 0; line-height: 1;
+    }
+    .cmd-edit:hover { opacity: 0.9; }
     .cmd-del {
       background: none; border: none; cursor: pointer;
       opacity: 0.35; font-size: 12px; padding: 0 2px;
       color: inherit; flex-shrink: 0; line-height: 1;
     }
     .cmd-del:hover { opacity: 1; color: #f14c4c; }
+    .cmd-edit-input {
+      flex: 1; font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px; padding: 1px 4px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 2px; outline: none;
+      width: 100%; min-width: 0;
+    }
 
     .cmd-empty { font-size: 11px; opacity: 0.4; padding: 4px 0 6px; }
 
@@ -683,6 +708,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   });
 
   let selectedScopes = new Set();
+  let currentAllowCommands = [];
 
   vscode.postMessage({ type: 'load' });
 
@@ -694,19 +720,20 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     approvalCmd.textContent = command;
 
     approvalScopes.innerHTML = scopes.map((s, i) => {
-      const safe   = esc(s.prefix);
-      const detail = esc(s.detail);
+      const safe      = esc(s.prefix);
+      const detail    = esc(s.detail);
+      const alreadyOk = currentAllowCommands.includes(s.prefix);
       return \`<label class="scope-option\${i === 0 ? ' selected' : ''}">
   <div class="scope-row">
     <input type="checkbox" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
     <span class="scope-prefix">\${safe}</span>
-    <select class="scope-dur" data-scope="\${safe}">
-      <option value="once">Once</option>
+    <select class="scope-dur" data-idx="\${i}">
+      <option value="once"\${alreadyOk ? '' : ' selected'}>Once</option>
       <option value="session">Session</option>
-      <option value="always">Always</option>
+      <option value="always"\${alreadyOk ? ' selected' : ''}>Always</option>
     </select>
   </div>
-  <div class="scope-detail">\${detail}</div>
+  <div class="scope-detail">\${detail}\${alreadyOk ? ' <span style="color:#3fb950;font-size:10px">✓ already approved</span>' : ''}</div>
 </label>\`;
     }).join('');
 
@@ -728,9 +755,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   allowBtn.addEventListener('click', () => {
     const approvals = [];
-    approvalScopes.querySelectorAll('input[name="scope"]').forEach(cb => {
+    const checkboxes = approvalScopes.querySelectorAll('input[name="scope"]');
+    const selects    = approvalScopes.querySelectorAll('select.scope-dur');
+    checkboxes.forEach((cb, idx) => {
       if (cb.checked) {
-        const dur = approvalScopes.querySelector('select[data-scope="' + cb.value + '"]');
+        const dur = selects[idx];
         approvals.push({ scope: cb.value, duration: dur ? dur.value : 'once' });
       }
     });
@@ -755,7 +784,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       if (msg.posture) postureSelect.value = msg.posture;
       updatePostureHint();
       setStatus(!!msg.apiKey, msg.model);
-      renderCommands(msg.allowCommands || []);
+      currentAllowCommands = msg.allowCommands || [];
+      renderCommands(currentAllowCommands);
       fullPermsToggle.checked = !!msg.fullPermissions;
 
       if (msg.hasWorkspace) {
@@ -770,7 +800,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
 
     if (msg.type === 'allowCommandsUpdate') {
-      renderCommands(msg.commands || []);
+      currentAllowCommands = msg.commands || [];
+      renderCommands(currentAllowCommands);
     }
 
     if (msg.type === 'approvalRequest') {
@@ -797,15 +828,63 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
     cmdList.innerHTML = commands.map(cmd => {
       const safe = esc(cmd);
-      return \`<li class="cmd-item">
+      return \`<li class="cmd-item" data-cmd="\${safe}">
         <span class="cmd-check">✓</span>
         <span class="cmd-text" title="\${safe}">\${safe}</span>
-        <button class="cmd-del" data-cmd="\${safe}" title="Remove">✕</button>
+        <button class="cmd-edit" title="Edit">✏</button>
+        <button class="cmd-del" title="Remove">✕</button>
       </li>\`;
     }).join('');
+
     cmdList.querySelectorAll('.cmd-del').forEach(btn => {
       btn.addEventListener('click', () => {
-        vscode.postMessage({ type: 'removeCommand', command: btn.dataset.cmd });
+        const cmd = btn.closest('li').dataset.cmd;
+        vscode.postMessage({ type: 'removeCommand', command: cmd });
+      });
+    });
+
+    cmdList.querySelectorAll('.cmd-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const li      = btn.closest('li');
+        const oldCmd  = li.dataset.cmd;
+        const textEl  = li.querySelector('.cmd-text');
+        const input   = document.createElement('input');
+        input.type      = 'text';
+        input.className = 'cmd-edit-input';
+        input.value     = oldCmd;
+        textEl.replaceWith(input);
+        input.focus();
+        input.select();
+        btn.style.display = 'none';
+
+        function commit() {
+          const newCmd = input.value.trim();
+          if (newCmd && newCmd !== oldCmd) {
+            vscode.postMessage({ type: 'editCommand', oldCommand: oldCmd, newCommand: newCmd });
+          } else {
+            // Revert
+            const span = document.createElement('span');
+            span.className = 'cmd-text';
+            span.title = esc(oldCmd);
+            span.textContent = oldCmd;
+            input.replaceWith(span);
+            btn.style.display = '';
+          }
+        }
+
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', e => {
+          if (e.key === 'Enter')  { input.blur(); }
+          if (e.key === 'Escape') {
+            input.removeEventListener('blur', commit);
+            const span = document.createElement('span');
+            span.className = 'cmd-text';
+            span.title = esc(oldCmd);
+            span.textContent = oldCmd;
+            input.replaceWith(span);
+            btn.style.display = '';
+          }
+        });
       });
     });
   }
