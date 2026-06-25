@@ -101,21 +101,25 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
 
         provider.setBadge(0);
 
-        if (!result || !result.scopes.length) {
+        if (!result || !result.approvals.length) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'deny' }));
             return;
         }
 
-        const { scopes: chosenPrefixes, duration: action } = result;
+        const { approvals } = result;
+        const allPrefixes = approvals.map(a => a.scope);
 
-        if (action === 'session' || action === 'always') {
-            chosenPrefixes.forEach(p => sessionApproved.add(p));
+        for (const { scope: chosenPrefix, duration: action } of approvals) {
+            if (action === 'session' || action === 'always') {
+                sessionApproved.add(chosenPrefix);
+            }
         }
 
-        if (action === 'always') {
+        const alwaysPrefixes = approvals.filter(a => a.duration === 'always').map(a => a.scope);
+        if (alwaysPrefixes.length) {
             const existing = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
-            const toAdd    = chosenPrefixes.filter(p => !existing.includes(p));
+            const toAdd    = alwaysPrefixes.filter(p => !existing.includes(p));
             if (toAdd.length) {
                 const updated = [...existing, ...toAdd].sort((a, b) => a.localeCompare(b));
                 await context.globalState.update('deepseek-allow-commands', updated);
@@ -128,7 +132,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ decision: 'allow', approvedPrefixes: chosenPrefixes }));
+        res.end(JSON.stringify({ decision: 'allow', approvedPrefixes: allPrefixes }));
     });
 
     await new Promise<void>((resolve, reject) => {

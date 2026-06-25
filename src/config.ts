@@ -7,7 +7,8 @@ export function writeMcpConfig(
     apiKey: string,
     model: string,
     posture: string,
-    allowCommands: string[]
+    allowCommands: string[],
+    fullPermissions?: boolean
 ): void {
     const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
     const serverPath = path.join(context.extensionUri.fsPath, 'out', 'server.js');
@@ -42,6 +43,6 @@ export function writeMcpConfig(
     const allowlistPath = path.join(home, '.claude', 'deepseek-allowlist.json');
     try {
         fs.mkdirSync(path.dirname(allowlistPath), { recursive: true });
-        fs.writeFileSync(allowlistPath, JSON.stringify(allowCommands));
+        fs.writeFileSync(allowlistPath, JSON.stringify({ fullPermissions: !!fullPermissions, commands: allowCommands }));
     } catch { /* non-fatal */ }
 }

@@ -34,11 +34,15 @@ const ALLOWLIST_FILE     = path.join(os.homedir(), '.claude', 'deepseek-allowlis
 // Re-read the dynamic allowlist written by the extension on every call so
 // "Always allow" approvals persist across MCP server restarts without needing
 // a full Claude Code restart to pick up the new env var.
+interface AllowlistFile { fullPermissions?: boolean; commands?: string[]; }
+
 function getDynamicAllowlist(): string[] {
     try {
         const raw    = fs.readFileSync(ALLOWLIST_FILE, 'utf8');
-        const parsed = JSON.parse(raw) as unknown;
-        return Array.isArray(parsed) ? (parsed as string[]).filter(s => typeof s === 'string') : [];
+        const parsed = JSON.parse(raw) as AllowlistFile | string[];
+        if (Array.isArray(parsed)) return parsed.filter(s => typeof s === 'string');
+        if (parsed.fullPermissions) return ['*'];  // wildcard — match everything
+        return Array.isArray(parsed.commands) ? parsed.commands.filter(s => typeof s === 'string') : [];
     } catch { return []; }
 }
 
@@ -333,9 +337,11 @@ async function toolRunCommand(args: Record<string, unknown>): Promise<string> {
     const command = String(args['command'] ?? '').trim();
     if (!command) throw new Error('command must be a non-empty string');
 
+    const dynamicList = getDynamicAllowlist();
     const preApproved =
+        dynamicList.includes('*') ||
         commandMatchesAllowlist(command, ALLOW_COMMANDS) ||
-        commandMatchesAllowlist(command, getDynamicAllowlist()) ||
+        commandMatchesAllowlist(command, dynamicList) ||
         commandMatchesAllowlist(command, sessionApproved);
 
     if (!preApproved) {

@@ -13,7 +13,7 @@ const MODELS = [
     { id: 'deepseek-v4-pro',   label: 'V4 Pro — Advanced reasoning' },
 ];
 
-type ApprovalResult = { scopes: string[]; duration: 'once' | 'session' | 'always' };
+type ApprovalResult = { approvals: { scope: string; duration: 'once' | 'session' | 'always' }[] };
 
 export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     private webviewView: vscode.WebviewView | null = null;
@@ -71,11 +71,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 const model         = this.context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
                 const posture       = this.context.globalState.get<string>('deepseek-posture') ?? 'edit';
                 const allowCommands = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
+                const fullPermissions = this.context.globalState.get<boolean>('deepseek-full-permissions') ?? false;
                 webviewView.webview.postMessage({
                     type: 'config', apiKey, model, posture, allowCommands,
                     workspaceName,
                     hasWorkspace:     !!workspacePath,
-                    workspaceEnabled: workspacePath ? isWorkspaceEnabled(workspacePath) : true
+                    workspaceEnabled: workspacePath ? isWorkspaceEnabled(workspacePath) : true,
+                    fullPermissions,
                 });
             }
 
@@ -104,7 +106,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
                 if (apiKey) {
                     const allowCommands = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
-                    writeMcpConfig(this.context, apiKey, model, posture, allowCommands);
+                    const fullPermissions = this.context.globalState.get<boolean>('deepseek-full-permissions') ?? false;
+                    writeMcpConfig(this.context, apiKey, model, posture, allowCommands, fullPermissions);
                     const action = await vscode.window.showInformationMessage(
                         'DeepSeek Bridge saved. Restart Claude Code to apply changes.',
                         'OK'
@@ -136,11 +139,20 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             if (msg.type === 'approvalResponse') {
                 if (this.pendingApproval) {
                     this.pendingApproval({
-                        scopes:   (msg as unknown as { scopes?: string[] }).scopes ?? [],
-                        duration: (msg.duration ?? 'once') as ApprovalResult['duration'],
+                        approvals: (msg as unknown as { approvals?: {scope:string;duration:string}[] }).approvals ?? [],
                     });
                     this.pendingApproval = null;
                 }
+            }
+
+            if (msg.type === 'toggleFullPerms') {
+                await this.context.globalState.update('deepseek-full-permissions', !!msg.enabled);
+                // Rewrite allowlist file with updated fullPermissions flag
+                const allowCommands = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
+                const apiKey  = await this.context.secrets.get('deepseek-api-key');
+                const model   = this.context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
+                const posture = this.context.globalState.get<string>('deepseek-posture') ?? 'edit';
+                if (apiKey) writeMcpConfig(this.context, apiKey, model, posture, allowCommands, !!msg.enabled);
             }
 
             if (msg.type === 'loadHistory') {
@@ -163,7 +175,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         const apiKey  = await this.context.secrets.get('deepseek-api-key');
         const model   = this.context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
         const posture = this.context.globalState.get<string>('deepseek-posture') ?? 'edit';
-        if (apiKey) writeMcpConfig(this.context, apiKey, model, posture, commands);
+        const fullPermissions = this.context.globalState.get<boolean>('deepseek-full-permissions') ?? false;
+        if (apiKey) writeMcpConfig(this.context, apiKey, model, posture, commands, fullPermissions);
     }
 
     private buildHtml(nonce: string): string {
@@ -246,6 +259,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
     .scope-row {
       display: flex; align-items: center; gap: 8px;
+    }
+    .scope-dur {
+      width: auto; padding: 2px 18px 2px 5px; font-size: 10.5px;
+      flex-shrink: 0; margin-left: auto;
+      background: var(--vscode-input-background);
+      color: var(--vscode-foreground);
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.35));
+      border-radius: 3px; font-family: inherit; appearance: none; cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'%3E%3Cpath fill='%23888' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 4px center;
     }
     .scope-option input[type="radio"] { flex-shrink: 0; accent-color: var(--vscode-focusBorder, #007acc); margin: 0; }
     .scope-prefix {
@@ -446,6 +469,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     .switch input:checked  + .slider         { background: #3fb950; }
     .switch input:checked  + .slider::before { transform: translateX(16px); }
     .switch input:disabled + .slider         { opacity: .4; cursor: not-allowed; }
+    .full-perms-toggle .slider { background: rgba(241,76,76,0.4); }
+    .full-perms-toggle input:checked + .slider { background: #f14c4c; }
 
     /* ── Allowed commands list (ZooCode style) ─────────────── */
     .cmd-list { list-style: none; display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
@@ -490,12 +515,6 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     <pre id="approvalCmd" class="ap-cmd"></pre>
     <p class="ap-section">Allow which scope?</p>
     <div id="approvalScopes"></div>
-    <p class="ap-section">For how long?</p>
-    <div class="dur-row" id="durationRow">
-      <button class="dur-btn active" data-dur="once">Once</button>
-      <button class="dur-btn" data-dur="session">Session</button>
-      <button class="dur-btn" data-dur="always">Always</button>
-    </div>
     <div class="ap-actions">
       <button class="btn-allow" id="allowBtn">Allow</button>
       <button class="btn-deny"  id="denyBtn">Deny</button>
@@ -547,6 +566,17 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     <button class="btn-primary" id="saveBtn">Save &amp; Connect</button>
 
     <hr class="divider">
+
+    <div class="ws-toggle full-perms-toggle" style="margin-bottom:12px">
+      <div class="ws-text">
+        <div class="ws-title">Full Permissions <span style="color:#f14c4c;font-size:10px;font-weight:700;margin-left:4px">CAUTION</span></div>
+        <div class="ws-sub">Auto-approve all commands — trusted environments only</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="fullPerms" />
+        <span class="slider"></span>
+      </label>
+    </div>
 
     <div class="field">
       <label>Auto-approved Commands</label>
@@ -617,20 +647,17 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   const approvalOverlay = document.getElementById('approvalOverlay');
   const approvalCmd     = document.getElementById('approvalCmd');
   const approvalScopes  = document.getElementById('approvalScopes');
-  const durationRow     = document.getElementById('durationRow');
   const allowBtn        = document.getElementById('allowBtn');
   const denyBtn         = document.getElementById('denyBtn');
 
-  let selectedScopes   = new Set();
-  let selectedDuration = 'once';
+  let selectedScopes = new Set();
 
   vscode.postMessage({ type: 'load' });
 
   // ── Approval card ──────────────────────────────────────────────────────────
 
   function showApproval(command, scopes) {
-    selectedScopes   = new Set([scopes[0]?.prefix].filter(Boolean));
-    selectedDuration = 'once';
+    selectedScopes = new Set([scopes[0]?.prefix].filter(Boolean));
 
     approvalCmd.textContent = command;
 
@@ -638,12 +665,17 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const safe   = esc(s.prefix);
       const detail = esc(s.detail);
       return \`<label class="scope-option\${i === 0 ? ' selected' : ''}">
-        <div class="scope-row">
-          <input type="checkbox" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
-          <span class="scope-prefix">\${safe}</span>
-        </div>
-        <div class="scope-detail">\${detail}</div>
-      </label>\`;
+  <div class="scope-row">
+    <input type="checkbox" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
+    <span class="scope-prefix">\${safe}</span>
+    <select class="scope-dur" data-scope="\${safe}">
+      <option value="once">Once</option>
+      <option value="session">Session</option>
+      <option value="always">Always</option>
+    </select>
+  </div>
+  <div class="scope-detail">\${detail}</div>
+</label>\`;
     }).join('');
 
     approvalScopes.querySelectorAll('input[name="scope"]').forEach(cb => {
@@ -654,10 +686,6 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       });
     });
 
-    durationRow.querySelectorAll('.dur-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.dur === 'once');
-    });
-
     approvalOverlay.style.display = 'block';
   }
 
@@ -666,17 +694,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     selectedScopes = new Set();
   }
 
-  durationRow.querySelectorAll('.dur-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      selectedDuration = btn.dataset.dur;
-      durationRow.querySelectorAll('.dur-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-    });
-  });
-
   allowBtn.addEventListener('click', () => {
-    if (!selectedScopes.size) return;
-    vscode.postMessage({ type: 'approvalResponse', scopes: [...selectedScopes], duration: selectedDuration });
+    const approvals = [];
+    approvalScopes.querySelectorAll('input[name="scope"]').forEach(cb => {
+      if (cb.checked) {
+        const dur = approvalScopes.querySelector('select[data-scope="' + cb.value + '"]');
+        approvals.push({ scope: cb.value, duration: dur ? dur.value : 'once' });
+      }
+    });
+    if (!approvals.length) return;
+    vscode.postMessage({ type: 'approvalResponse', approvals });
     hideApproval();
   });
 
@@ -697,6 +724,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       updatePostureHint();
       setStatus(!!msg.apiKey, msg.model);
       renderCommands(msg.allowCommands || []);
+      fullPermsToggle.checked = !!msg.fullPermissions;
 
       if (msg.hasWorkspace) {
         wsName.textContent = msg.workspaceName || 'this workspace';
@@ -754,6 +782,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   addCmdBtn.addEventListener('click', addCommand);
   addCmdInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCommand(); });
+
+  const fullPermsToggle = document.getElementById('fullPerms');
+  fullPermsToggle.addEventListener('change', () => {
+    vscode.postMessage({ type: 'toggleFullPerms', enabled: fullPermsToggle.checked });
+  });
 
   // ── Config controls ────────────────────────────────────────────────────────
 
