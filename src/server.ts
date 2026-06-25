@@ -5,6 +5,8 @@ import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
+import * as http from 'http';
+import * as os from 'os';
 import { createJail } from './jail';
 import { isWorkspaceEnabled } from './control';
 
@@ -24,6 +26,61 @@ try {
         ALLOW_COMMANDS = Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === 'string') : [];
     }
 } catch { ALLOW_COMMANDS = []; }
+
+const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
+
+// Commands approved via popup this MCP session (prefix-keyed, mirrors extension-side cache).
+const sessionApproved = new Set<string>();
+
+function extractPrefix(command: string): string {
+    const idx = command.indexOf(' --');
+    return idx >= 0 ? command.slice(0, idx).trim() : command;
+}
+
+function commandMatchesAllowlist(command: string, list: Iterable<string>): boolean {
+    for (const entry of list) {
+        if (command === entry || command.startsWith(entry + ' ')) return true;
+    }
+    return false;
+}
+
+async function requestCommandApproval(command: string): Promise<boolean> {
+    let port = 0;
+    try { port = parseInt(fs.readFileSync(APPROVAL_PORT_FILE, 'utf8').trim(), 10); } catch { return false; }
+    if (!port || isNaN(port)) return false;
+
+    return new Promise<boolean>((resolve) => {
+        const body = JSON.stringify({ command });
+        const req  = http.request({
+            hostname: '127.0.0.1',
+            port,
+            path:   '/approve',
+            method: 'POST',
+            headers: {
+                'Content-Type':   'application/json',
+                'Content-Length': Buffer.byteLength(body),
+            },
+        }, (res) => {
+            let data = '';
+            res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+            res.on('end', () => {
+                try {
+                    const { decision } = JSON.parse(data) as { decision: string };
+                    if (decision === 'allow') {
+                        // Mirror the session approval so repeated calls skip the popup.
+                        sessionApproved.add(extractPrefix(command));
+                    }
+                    resolve(decision === 'allow');
+                } catch { resolve(false); }
+            });
+        });
+        req.on('error', () => resolve(false));
+        // Give the user up to 5 minutes to respond to the popup.
+        req.setTimeout(300_000, () => { req.destroy(); resolve(false); });
+        req.write(body);
+        req.end();
+    });
+}
 
 const WORKSPACE_RAW =
     process.env['CLAUDE_PROJECT_DIR'] ??
@@ -219,18 +276,19 @@ function parseArgv(cmd: string): string[] {
     return argv;
 }
 
-function toolRunCommand(args: Record<string, unknown>): string {
+async function toolRunCommand(args: Record<string, unknown>): Promise<string> {
     const command = String(args['command'] ?? '').trim();
     if (!command) throw new Error('command must be a non-empty string');
 
-    const allowed = ALLOW_COMMANDS.find(
-        entry => command === entry || command.startsWith(entry + ' ')
-    );
-    if (!allowed) {
-        throw new Error(
-            `'${command}' is not in the allowed command list.\n` +
-            `Allowed prefixes: ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}`
-        );
+    const preApproved =
+        commandMatchesAllowlist(command, ALLOW_COMMANDS) ||
+        commandMatchesAllowlist(command, sessionApproved);
+
+    if (!preApproved) {
+        const approved = await requestCommandApproval(command);
+        if (!approved) {
+            throw new Error(`command denied: '${command}'`);
+        }
     }
 
     const argv = parseArgv(command);
@@ -252,18 +310,18 @@ function toolRunCommand(args: Record<string, unknown>): string {
     return `[exit: ${status}]${combined ? '\n' + combined : ''}`;
 }
 
-function executeTool(
+async function executeTool(
     name:     string,
     args:     Record<string, unknown>,
     policy:   CallPolicy,
     manifest: Manifest
-): string {
+): Promise<string> {
     audit(name, args);
     try {
         if (name === 'list_directory') return toolListDirectory(args);
         if (name === 'read_file')      return toolReadFile(args);
         if (name === 'write_file')     return toolWriteFile(args, policy, manifest);
-        if (name === 'run_command')    return toolRunCommand(args);
+        if (name === 'run_command')    return await toolRunCommand(args);
         return `Error: unknown tool ${name}`;
     } catch (err: unknown) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -418,7 +476,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
             callCounts.set(sig, count);
             const result = count > 3
                 ? 'Error: repeated identical tool call suppressed (possible loop)'
-                : executeTool(call.function.name, parsed, policy, manifest);
+                : await executeTool(call.function.name, parsed, policy, manifest);
 
             const safe = cap(result).replace(/<<<+/g, '<<');
             messages.push({
