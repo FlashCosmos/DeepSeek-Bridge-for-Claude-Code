@@ -58,9 +58,13 @@ function extractExecutable(segment: string): string {
 
 interface ScopeOption { prefix: string; label: string; detail: string; inPath: boolean; }
 
-// Check if an executable name is findable on the system PATH.
+// Shell built-ins are never on PATH but are valid scope options.
+const SHELL_BUILTINS = new Set(['cd', 'echo', 'export', 'set', 'pwd', 'source', 'alias', 'unset', 'exit', 'return']);
+
+// Check if an executable name is findable on the system PATH (or is a known shell built-in).
 function isInPath(exe: string): boolean {
     if (!exe || exe.includes('/') || exe.includes('\\')) return false;
+    if (SHELL_BUILTINS.has(exe.toLowerCase())) return true;
     try {
         const cmd = process.platform === 'win32' ? `where "${exe}"` : `which "${exe}"`;
         execSync(cmd, { stdio: 'pipe', timeout: 2000 });
