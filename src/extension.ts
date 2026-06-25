@@ -37,10 +37,13 @@ function isSessionApproved(command: string): boolean {
     return segments.every(seg => prefixes.some(p => segmentMatchesPrefix(seg, p)));
 }
 
-// Split a shell command string on operators into individual segments.
-// "git add . && git commit -m 'msg'" → ["git add .", "git commit -m 'msg'"]
+// Split a shell command string on unambiguous operators into individual segments.
+// Intentionally omits bare | — a pipe inside a quoted argument (e.g. PowerShell
+// -Command "... | Select-String") would otherwise be treated as a shell operator,
+// producing false scope tokens like "Select-String", "const", "interface".
+// The server-side allowlist checker still splits on | for security purposes.
 function parseSegments(command: string): string[] {
-    return command.split(/\s*(?:&&|\|\||;|\|)\s*/).map(s => s.trim()).filter(Boolean);
+    return command.split(/\s*(?:&&|\|\||;)\s*/).map(s => s.trim()).filter(Boolean);
 }
 
 // Extract the executable name from a command segment (skip env-var prefixes like KEY=val).
@@ -65,6 +68,8 @@ function isInPath(exe: string): boolean {
 }
 
 // Build the list of scope options: exact full command + deduplicated executables.
+// Only real PATH executables are offered as "any X" scope options — tokens that
+// aren't on PATH (PowerShell sub-commands, keywords, script args) are skipped.
 function buildScopeOptions(command: string): ScopeOption[] {
     const options: ScopeOption[] = [];
     const seen = new Set<string>();
@@ -74,9 +79,9 @@ function buildScopeOptions(command: string): ScopeOption[] {
 
     for (const seg of parseSegments(command)) {
         const exe = extractExecutable(seg);
-        if (exe && !seen.has(exe)) {
+        if (exe && !seen.has(exe) && isInPath(exe)) {
             seen.add(exe);
-            options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command`, inPath: isInPath(exe) });
+            options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command`, inPath: true });
         }
     }
 

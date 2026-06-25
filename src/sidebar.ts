@@ -740,18 +740,14 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const safe      = esc(s.prefix);
       const detail    = esc(s.detail);
       const alreadyOk = currentAllowCommands.includes(s.prefix);
-      const notInPath = i > 0 && s.inPath === false;   // only warn on executable rows, not exact cmd
-      // Default checked: first row always; others only if already approved
       const checked   = i === 0 || alreadyOk;
       const extraNote = alreadyOk
         ? ' <span style="color:#3fb950;font-size:10px">✓ already approved</span>'
-        : notInPath
-          ? ' <span style="color:#e2a730;font-size:10px" title="Not found in PATH — may not be a real shell command">⚠ not in PATH</span>'
-          : '';
+        : '';
       return \`<label class="scope-option\${checked ? ' selected' : ''}">
   <div class="scope-row">
     <input type="checkbox" name="scope" value="\${safe}" \${checked ? 'checked' : ''}>
-    <span class="scope-prefix"\${notInPath ? ' style="opacity:0.55"' : ''}>\${safe}</span>
+    <span class="scope-prefix">\${safe}</span>
     <select class="scope-dur" data-idx="\${i}">
       <option value="once"\${alreadyOk ? '' : ' selected'}>Once</option>
       <option value="session">Session</option>
