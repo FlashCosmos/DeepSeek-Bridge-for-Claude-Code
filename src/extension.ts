@@ -19,7 +19,7 @@ function extractPrefix(command: string): string {
     return idx >= 0 ? command.slice(0, idx).trim() : command;
 }
 
-async function startApprovalServer(context: vscode.ExtensionContext): Promise<void> {
+async function startApprovalServer(context: vscode.ExtensionContext, provider: import('./sidebar').DeepSeekSidebarProvider): Promise<void> {
     const server = http.createServer(async (req, res) => {
         if (req.method !== 'POST' || req.url !== '/approve') {
             res.writeHead(404).end();
@@ -66,6 +66,7 @@ async function startApprovalServer(context: vscode.ExtensionContext): Promise<vo
                 const model   = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
                 const posture = context.globalState.get<string>('deepseek-posture') ?? 'edit';
                 if (apiKey) writeMcpConfig(context, apiKey, model, posture, updated);
+                provider.pushAllowCommands(updated);
             }
         }
 
@@ -102,7 +103,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         })
     );
 
-    await startApprovalServer(context);
+    await startApprovalServer(context, provider);
 
     const apiKey       = await context.secrets.get('deepseek-api-key');
     const model        = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
