@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { writeMcpConfig } from './config';
 import { isWorkspaceEnabled, setWorkspaceEnabled } from './control';
+
+const HISTORY_FILE = path.join(os.homedir(), '.claude', 'deepseek-history.json');
 
 const MODELS = [
     { id: 'deepseek-v4-flash', label: 'V4 Flash — Fast & cheap (recommended)' },
@@ -136,6 +141,12 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                     });
                     this.pendingApproval = null;
                 }
+            }
+
+            if (msg.type === 'loadHistory') {
+                let data: { version: number; entries: unknown[] } = { version: 1, entries: [] };
+                try { data = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')); } catch { /* no history yet */ }
+                webviewView.webview.postMessage({ type: 'historyData', entries: data.entries ?? [] });
             }
 
             if (msg.type === 'approvalDeny') {
@@ -285,6 +296,67 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
     .btn-deny:hover { opacity: 1; border-color: #f14c4c; color: #f14c4c; }
 
+    /* ── Tabs ─────────────────────────────────────────────── */
+    .tab-bar {
+      display: flex; gap: 2px; margin-bottom: 14px;
+      border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+      padding-bottom: 0;
+    }
+    .tab-btn {
+      padding: 5px 14px; border: none; background: none;
+      color: var(--vscode-foreground); font-family: inherit; font-size: inherit;
+      cursor: pointer; opacity: 0.55; border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab-btn:hover { opacity: 0.85; }
+    .tab-btn.active { opacity: 1; border-bottom-color: var(--vscode-focusBorder, #007acc); font-weight: 600; }
+
+    /* ── History tab ───────────────────────────────────────── */
+    .history-entry {
+      padding: 9px 10px;
+      border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+      border-radius: 4px; margin-bottom: 6px;
+      background: var(--vscode-input-background);
+    }
+    .history-meta {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 4px;
+    }
+    .history-date { font-size: 10.5px; opacity: 0.5; }
+    .history-tool {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; opacity: 0.4;
+    }
+    .history-summary {
+      font-size: 11.5px; margin-bottom: 8px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: var(--vscode-foreground);
+    }
+    .history-costs { display: flex; flex-direction: column; gap: 2px; }
+    .cost-row { display: flex; justify-content: space-between; font-size: 11px; }
+    .cost-label { opacity: 0.6; }
+    .cost-ds  { color: #3fb950; font-variant-numeric: tabular-nums; }
+    .cost-claude { opacity: 0.7; font-variant-numeric: tabular-nums; }
+    .cost-saved { color: #3fb950; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    .history-totals {
+      margin-top: 10px; padding: 10px;
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 4px;
+      background: rgba(0,122,204,0.07);
+    }
+    .totals-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6; margin-bottom: 6px; }
+    .totals-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+    .totals-saved { color: #3fb950; font-weight: 700; font-size: 13px; }
+
+    .history-empty { font-size: 11px; opacity: 0.4; padding: 8px 0; }
+
+    .btn-refresh {
+      background: none; border: none; cursor: pointer; opacity: 0.5;
+      color: var(--vscode-foreground); font-size: 13px; padding: 2px 4px;
+    }
+    .btn-refresh:hover { opacity: 1; }
+
     /* ── Config panel ──────────────────────────────────────── */
     .status-bar {
       display: flex; align-items: center; gap: 8px;
@@ -403,6 +475,12 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="config">Config</button>
+    <button class="tab-btn" data-tab="history">History</button>
+  </div>
+
   <!-- Approval card (shown when DeepSeek needs permission) -->
   <div id="approvalOverlay">
     <div class="ap-header">
@@ -489,6 +567,34 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       (.env, .ssh, .aws, auth.json, keys, .git, SQLite) are blocked.
     </p>
 
+  </div><!-- /configPanel -->
+
+  <!-- History panel -->
+  <div id="historyPanel" style="display:none">
+    <div class="field" style="margin-bottom:10px">
+      <label>Compare to Claude</label>
+      <select id="claudeTier">
+        <option value="haiku">Haiku 4.5 — $0.80 / $4.00 per M tokens</option>
+        <option value="sonnet" selected>Sonnet 4.6 — $3.00 / $15.00 per M tokens</option>
+        <option value="opus">Opus 4.8 — $15.00 / $75.00 per M tokens</option>
+      </select>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <label style="margin:0">Sessions</label>
+      <button class="btn-refresh" id="refreshHistory" title="Refresh">↺</button>
+    </div>
+
+    <div id="historyList">
+      <p class="history-empty">No history yet — run a DeepSeek task to start tracking costs.</p>
+    </div>
+
+    <div id="historyTotals" style="display:none" class="history-totals">
+      <div class="totals-title">Lifetime</div>
+      <div class="totals-row"><span>DeepSeek spent</span><span id="totDs" class="cost-ds"></span></div>
+      <div class="totals-row"><span id="totClaudeLabel">Sonnet 4.6 would cost</span><span id="totClaude" class="cost-claude"></span></div>
+      <div class="totals-row"><span>Total saved</span><span id="totSaved" class="totals-saved"></span></div>
+    </div>
   </div>
 
 <script nonce="${nonce}">
@@ -610,6 +716,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     if (msg.type === 'approvalRequest') {
       showApproval(msg.command, msg.scopes);
     }
+
+    if (msg.type === 'historyData') {
+      historyEntries = msg.entries || [];
+      renderHistory();
+    }
   });
 
   // ── Allowed commands (ZooCode style) ──────────────────────────────────────
@@ -690,6 +801,102 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   function esc(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  // ── Tab switching ──────────────────────────────────────────────────────────
+
+  const configPanel  = document.getElementById('configPanel');
+  const historyPanel = document.getElementById('historyPanel');
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tab = btn.dataset.tab;
+      configPanel.style.display  = tab === 'config'  ? '' : 'none';
+      historyPanel.style.display = tab === 'history' ? '' : 'none';
+      if (tab === 'history') vscode.postMessage({ type: 'loadHistory' });
+    });
+  });
+
+  // ── History rendering ──────────────────────────────────────────────────────
+
+  const CLAUDE_PRICING = {
+    haiku:  { input: 0.80,  output: 4.00  },
+    sonnet: { input: 3.00,  output: 15.00 },
+    opus:   { input: 15.00, output: 75.00 },
+  };
+  const CLAUDE_LABEL = { haiku: 'Haiku 4.5', sonnet: 'Sonnet 4.6', opus: 'Opus 4.8' };
+
+  let historyEntries = [];
+  const claudeTierSelect  = document.getElementById('claudeTier');
+  const historyListEl     = document.getElementById('historyList');
+  const historyTotalsEl   = document.getElementById('historyTotals');
+  const totDsEl           = document.getElementById('totDs');
+  const totClaudeEl       = document.getElementById('totClaude');
+  const totClaudeLabelEl  = document.getElementById('totClaudeLabel');
+  const totSavedEl        = document.getElementById('totSaved');
+
+  function fmt(usd) {
+    if (usd < 0.0001) return '<$0.0001';
+    if (usd < 0.01)   return '$' + usd.toFixed(4);
+    if (usd < 1)      return '$' + usd.toFixed(3);
+    return '$' + usd.toFixed(2);
+  }
+
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      + '  ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderHistory() {
+    const tier    = claudeTierSelect.value;
+    const pricing = CLAUDE_PRICING[tier];
+    const label   = CLAUDE_LABEL[tier];
+
+    if (!historyEntries.length) {
+      historyListEl.innerHTML = '<p class="history-empty">No history yet — run a DeepSeek task to start tracking costs.</p>';
+      historyTotalsEl.style.display = 'none';
+      return;
+    }
+
+    let lifeDsCost = 0, lifeClaudeCost = 0;
+
+    historyListEl.innerHTML = [...historyEntries].reverse().map(e => {
+      const claudeCost = (e.inputTokens / 1_000_000) * pricing.input
+                       + (e.outputTokens / 1_000_000) * pricing.output;
+      const saved      = claudeCost - e.deepseekCostUsd;
+      const pct        = claudeCost > 0 ? Math.round((saved / claudeCost) * 100) : 0;
+      lifeDsCost    += e.deepseekCostUsd;
+      lifeClaudeCost += claudeCost;
+      return \`<div class="history-entry">
+        <div class="history-meta">
+          <span class="history-date">\${esc(fmtDate(e.timestamp))}</span>
+          <span class="history-tool">\${esc(e.tool === 'run_deepseek_task' ? 'task' : 'ask')}</span>
+        </div>
+        <div class="history-summary" title="\${esc(e.summary)}">\${esc(e.summary)}</div>
+        <div class="history-costs">
+          <div class="cost-row"><span class="cost-label">DeepSeek</span><span class="cost-ds">\${fmt(e.deepseekCostUsd)}</span></div>
+          <div class="cost-row"><span class="cost-label">\${esc(label)}</span><span class="cost-claude">\${fmt(claudeCost)}</span></div>
+          <div class="cost-row"><span class="cost-label">Saved</span><span class="cost-saved">\${fmt(saved)} (\${pct}%)</span></div>
+        </div>
+      </div>\`;
+    }).join('');
+
+    // Lifetime totals
+    const lifeSaved = lifeClaudeCost - lifeDsCost;
+    const lifePct   = lifeClaudeCost > 0 ? Math.round((lifeSaved / lifeClaudeCost) * 100) : 0;
+    totClaudeLabelEl.textContent = label + ' would cost';
+    totDsEl.textContent          = fmt(lifeDsCost);
+    totClaudeEl.textContent      = fmt(lifeClaudeCost);
+    totSavedEl.textContent       = fmt(lifeSaved) + ' (' + lifePct + '%)';
+    historyTotalsEl.style.display = '';
+  }
+
+  claudeTierSelect.addEventListener('change', renderHistory);
+  document.getElementById('refreshHistory').addEventListener('click', () => {
+    vscode.postMessage({ type: 'loadHistory' });
+  });
 </script>
 </body>
 </html>`;

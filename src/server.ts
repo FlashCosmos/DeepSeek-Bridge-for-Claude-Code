@@ -28,6 +28,45 @@ try {
 } catch { ALLOW_COMMANDS = []; }
 
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
+const HISTORY_FILE       = path.join(os.homedir(), '.claude', 'deepseek-history.json');
+
+// ── Cost tracking ──────────────────────────────────────────────────────────────
+
+const DEEPSEEK_PRICING: Record<string, { input: number; output: number }> = {
+    'deepseek-v4-flash': { input: 0.07,  output: 0.28  },
+    'deepseek-v4-pro':   { input: 0.55,  output: 2.19  },
+};
+
+function calcCost(model: string, inputTok: number, outputTok: number): number {
+    const p = DEEPSEEK_PRICING[model] ?? DEEPSEEK_PRICING['deepseek-v4-flash'];
+    return (inputTok / 1_000_000) * p.input + (outputTok / 1_000_000) * p.output;
+}
+
+interface HistoryEntry {
+    id:              string;
+    timestamp:       string;
+    tool:            string;
+    summary:         string;
+    model:           string;
+    inputTokens:     number;
+    outputTokens:    number;
+    deepseekCostUsd: number;
+}
+
+function appendHistory(entry: HistoryEntry): void {
+    let data: { version: number; entries: HistoryEntry[] } = { version: 1, entries: [] };
+    try {
+        const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
+        const parsed = JSON.parse(raw) as { version?: number; entries?: HistoryEntry[] };
+        data.entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+    } catch { /* first run or corrupt — start fresh */ }
+    data.entries.push(entry);
+    if (data.entries.length > 1000) data.entries = data.entries.slice(-1000);
+    try {
+        fs.mkdirSync(path.dirname(HISTORY_FILE), { recursive: true });
+        fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2));
+    } catch { /* non-fatal */ }
+}
 
 // Prefixes approved via popup this MCP session (mirrors extension-side cache).
 // A prefix like "node" matches "node --version", "node script.js", etc.
@@ -413,6 +452,8 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
     sessionBytes = 0;
     const callCounts = new Map<string, number>();
     const manifest: Manifest = { created: [], modified: [], skipped: [], proposed: [] };
+    let totalInputTokens  = 0;
+    let totalOutputTokens = 0;
 
     const postureDesc =
         policy.posture === 'read'        ? 'READ — list and read files only, no writes' :
@@ -457,6 +498,11 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
             max_tokens: 8192
         });
 
+        if (response.usage) {
+            totalInputTokens  += response.usage.prompt_tokens;
+            totalOutputTokens += response.usage.completion_tokens;
+        }
+
         const choice = response.choices[0];
         if (!choice) break;
 
@@ -489,6 +535,17 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
     }
 
     if (!finalSummary) finalSummary = '(agent reached its iteration or budget limit without a final response)';
+
+    appendHistory({
+        id:              Math.random().toString(36).slice(2, 10),
+        timestamp:       new Date().toISOString(),
+        tool:            'run_deepseek_task',
+        summary:         finalSummary.slice(0, 140).replace(/\n/g, ' '),
+        model:           MODEL,
+        inputTokens:     totalInputTokens,
+        outputTokens:    totalOutputTokens,
+        deepseekCostUsd: calcCost(MODEL, totalInputTokens, totalOutputTokens),
+    });
 
     return {
         summary:  finalSummary,
@@ -592,6 +649,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         messages.push({ role: 'user', content: prompt });
         const response = await client.chat.completions.create({ model: MODEL, messages, max_tokens: 8192 });
         const text = response.choices[0]?.message?.content ?? '(no response)';
+        if (response.usage) {
+            appendHistory({
+                id:              Math.random().toString(36).slice(2, 10),
+                timestamp:       new Date().toISOString(),
+                tool:            'ask_deepseek',
+                summary:         text.slice(0, 140).replace(/\n/g, ' '),
+                model:           MODEL,
+                inputTokens:     response.usage.prompt_tokens,
+                outputTokens:    response.usage.completion_tokens,
+                deepseekCostUsd: calcCost(MODEL, response.usage.prompt_tokens, response.usage.completion_tokens),
+            });
+        }
         return { content: [{ type: 'text' as const, text }] };
     }
 

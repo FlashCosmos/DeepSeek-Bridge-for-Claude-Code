@@ -8,6 +8,16 @@ import { writeMcpConfig } from './config';
 import { isWorkspaceEnabled } from './control';
 
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
+const HISTORY_FILE       = path.join(os.homedir(), '.claude', 'deepseek-history.json');
+
+function readHistory(): { version: number; entries: unknown[] } {
+    try {
+        const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
+        return JSON.parse(raw) as { version: number; entries: unknown[] };
+    } catch {
+        return { version: 1, entries: [] };
+    }
+}
 
 // Prefixes approved via popup this VSCode session (forgotten on restart).
 // A prefix like "node" matches "node --version", "node script.js", etc.
