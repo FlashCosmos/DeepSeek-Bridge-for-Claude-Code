@@ -10,7 +10,9 @@ PUBLISHING.md
 CODE-INDEX.md
 DEEPSEEK-MCP-IMPROVEMENTS.md
 TODO.md
+changelog.md
 .deepseek-audit.log
 media/architecture.svg
 media/architecture.png
+media/logo.jpg
 !out/**
