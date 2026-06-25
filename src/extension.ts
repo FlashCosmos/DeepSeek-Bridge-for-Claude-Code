@@ -42,22 +42,28 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
             return;
         }
 
-        const label = command.length > 100 ? command.slice(0, 97) + '…' : command;
-        const choice = await vscode.window.showWarningMessage(
-            `DeepSeek wants to run:\n\n${label}`,
-            { modal: true },
-            'Allow once',
-            'Allow this session',
-            'Always allow',
-        );
+        interface ApprovalItem extends vscode.QuickPickItem { action: 'once' | 'session' | 'always' | 'deny'; }
+        const items: ApprovalItem[] = [
+            { label: '$(check)     Allow once',          description: 'Run this time — ask again next time',     action: 'once'    },
+            { label: '$(clock)     Allow this session',  description: 'Auto-approve until VS Code restarts',     action: 'session' },
+            { label: '$(star-full) Always allow',        description: 'Add to permanent allowlist',              action: 'always'  },
+            { label: '$(x)         Deny',                description: 'Block this command',                      action: 'deny'    },
+        ];
+        const cmdLabel = command.length > 80 ? command.slice(0, 77) + '…' : command;
+        const picked = await vscode.window.showQuickPick(items, {
+            title:           `DeepSeek: Allow command?`,
+            placeHolder:     cmdLabel,
+            ignoreFocusOut:  true,
+        });
 
-        const approved = choice === 'Allow once' || choice === 'Allow this session' || choice === 'Always allow';
+        const action   = picked?.action ?? 'deny';
+        const approved = action !== 'deny';
 
-        if (choice === 'Allow this session' || choice === 'Always allow') {
+        if (action === 'session' || action === 'always') {
             sessionApproved.add(prefix);
         }
 
-        if (choice === 'Always allow') {
+        if (action === 'always') {
             const existing = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
             if (!existing.includes(prefix)) {
                 const updated = [...existing, prefix];
