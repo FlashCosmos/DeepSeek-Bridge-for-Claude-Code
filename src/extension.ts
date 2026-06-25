@@ -78,7 +78,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         // Session cache hit — no popup needed.
         if (isSessionApproved(command)) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ decision: 'allow', approvedPrefix: command }));
+            res.end(JSON.stringify({ decision: 'allow', approvedPrefixes: [command] }));
             return;
         }
 
@@ -118,7 +118,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ decision: 'allow', approvedPrefix: chosenPrefixes[0] }));
+        res.end(JSON.stringify({ decision: 'allow', approvedPrefixes: chosenPrefixes }));
     });
 
     await new Promise<void>((resolve, reject) => {

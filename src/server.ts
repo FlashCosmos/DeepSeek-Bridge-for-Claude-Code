@@ -67,12 +67,12 @@ async function requestCommandApproval(command: string): Promise<boolean> {
             res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
             res.on('end', () => {
                 try {
-                    const { decision, approvedPrefix } = JSON.parse(data) as { decision: string; approvedPrefix?: string };
-                    if (decision === 'allow' && approvedPrefix) {
-                        // Mirror the approved prefix so repeated calls skip the popup.
-                        sessionApproved.add(approvedPrefix);
+                    const parsed = JSON.parse(data) as { decision: string; approvedPrefixes?: string[] };
+                    if (parsed.decision === 'allow') {
+                        // Cache every approved prefix so repeated calls skip the popup.
+                        (parsed.approvedPrefixes ?? []).forEach(p => sessionApproved.add(p));
                     }
-                    resolve(decision === 'allow');
+                    resolve(parsed.decision === 'allow');
                 } catch { resolve(false); }
             });
         });
