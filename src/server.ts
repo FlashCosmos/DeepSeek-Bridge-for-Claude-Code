@@ -714,6 +714,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             dryRun:     a['dryRun'] === true,
         };
 
+        // Clear any stale kill signal left over from a previous task.
+        try { fs.unlinkSync(KILL_FILE); } catch {}
+
         notifyRunning(true);
         let result: AgentResult;
         try {
