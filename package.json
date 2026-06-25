@@ -2,16 +2,29 @@
   "name": "deepseek-bridge",
   "displayName": "DeepSeek Bridge",
   "description": "Let Claude Code offload token-heavy, file-based chores to DeepSeek — sandboxed, cheaper, you stay in control.",
-  "version": "1.1.5",
+  "version": "1.1.7",
   "publisher": "your-publisher-id",
   "license": "MIT",
   "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.100.0"
   },
-  "extensionKind": ["workspace"],
-  "categories": ["AI", "Machine Learning", "Other"],
-  "keywords": ["deepseek", "claude", "claude code", "mcp", "ai agent", "token saving"],
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "AI",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "deepseek",
+    "claude",
+    "claude code",
+    "mcp",
+    "ai agent",
+    "token saving"
+  ],
   "galleryBanner": {
     "color": "#3A4ECE",
     "theme": "dark"
@@ -24,7 +37,9 @@
     "url": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/issues"
   },
   "homepage": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge#readme",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -61,6 +76,7 @@
     "vscode:prepublish": "npm run bundle"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.100.0",
     "@vscode/vsce": "^3.0.0",

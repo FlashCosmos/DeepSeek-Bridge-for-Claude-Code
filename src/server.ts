@@ -142,6 +142,20 @@ async function requestCommandApproval(command: string): Promise<boolean> {
     });
 }
 
+function postEvent(eventType: string, data: Record<string, unknown>): void {
+    let port = 0;
+    try { port = parseInt(fs.readFileSync(APPROVAL_PORT_FILE, 'utf8').trim(), 10); } catch { return; }
+    if (!port || isNaN(port)) return;
+    const body = JSON.stringify({ eventType, data });
+    const req = http.request({
+        hostname: '127.0.0.1', port, path: '/event', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => { res.resume(); });
+    req.on('error', () => {});
+    req.write(body);
+    req.end();
+}
+
 // Fire-and-forget: tell the extension's sidebar whether a task is running.
 function notifyRunning(running: boolean): void {
     let port = 0;
@@ -211,7 +225,7 @@ const LIMITS = {
     maxWriteBytes:     1024 * 1024,
     maxResultChars:    8000,
     sessionByteBudget: 32 * 1024 * 1024,
-    maxIterations:     30,
+    maxIterations:     80,
 };
 
 // ── Glob matching for writePaths ───────────────────────────────────────────────
@@ -487,6 +501,7 @@ interface AgentResult {
 
 async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentResult> {
     sessionBytes = 0;
+    postEvent('task_start', { prompt: prompt.slice(0, 120) });
     const callCounts = new Map<string, number>();
     const manifest: Manifest = { created: [], modified: [], skipped: [], proposed: [] };
     let totalInputTokens  = 0;
@@ -564,11 +579,21 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
         const choice = response.choices[0];
         if (!choice) break;
 
+        // Emit token usage for this iteration
+        if (response.usage) {
+            postEvent('tokens', {
+                iteration: i + 1,
+                input: response.usage.prompt_tokens,
+                output: response.usage.completion_tokens,
+            });
+        }
+
         const msg = choice.message;
         messages.push(msg as OpenAI.Chat.ChatCompletionMessageParam);
 
         if (choice.finish_reason === 'stop' || !msg.tool_calls?.length) {
             finalSummary = msg.content ?? '(task completed with no text output)';
+            postEvent('response', { content: (msg.content ?? '').slice(0, 200) });
             break;
         }
 
@@ -579,9 +604,11 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
             const sig   = call.function.name + ':' + call.function.arguments;
             const count = (callCounts.get(sig) ?? 0) + 1;
             callCounts.set(sig, count);
+            postEvent('tool_call', { name: call.function.name, args: parsed });
             const result = count > 3
                 ? 'Error: repeated identical tool call suppressed (possible loop)'
                 : await executeTool(call.function.name, parsed, policy, manifest);
+            postEvent('tool_result', { name: call.function.name, result: result.slice(0, 150) });
 
             const safe = cap(result).replace(/<<<+/g, '<<');
             messages.push({
@@ -593,6 +620,13 @@ async function runAgentLoop(prompt: string, policy: CallPolicy): Promise<AgentRe
     }
 
     if (!finalSummary) finalSummary = '(agent reached its iteration or budget limit without a final response)';
+
+    postEvent('task_end', {
+        summary: finalSummary.slice(0, 150),
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        costUsd: calcCost(MODEL, totalInputTokens, totalOutputTokens),
+    });
 
     appendHistory({
         id:              Math.random().toString(36).slice(2, 10),
@@ -742,6 +776,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } catch (e) {
             notifyRunning(false);
             if ((e as Error).message === '__killed__') {
+                postEvent('task_killed', {});
                 return { content: [{ type: 'text' as const, text: 'Task stopped by user.' }] };
             }
             throw e;

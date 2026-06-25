@@ -104,6 +104,18 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
             return;
         }
 
+        if (req.method === 'POST' && req.url === '/event') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            await new Promise<void>(r => req.on('end', r));
+            try {
+                const { eventType, data } = JSON.parse(body) as { eventType: string; data: Record<string, unknown> };
+                provider.postConsoleEvent(eventType, data);
+            } catch {}
+            res.writeHead(200).end();
+            return;
+        }
+
         if (req.method !== 'POST' || req.url !== '/approve') {
             res.writeHead(404).end();
             return;

@@ -31,6 +31,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         this.webviewView?.webview.postMessage({ type: 'taskRunning', running });
     }
 
+    /** Forward a live console event to the sidebar. */
+    postConsoleEvent(eventType: string, data: Record<string, unknown>): void {
+        this.webviewView?.webview.postMessage({ type: 'consoleEvent', eventType, data });
+    }
+
     /** Show the approval card in the sidebar. Resolves when user responds. */
     async requestApproval(
         command: string,
@@ -417,6 +422,25 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
     .btn-refresh:hover { opacity: 1; }
 
+    /* ── Console tab ──────────────────────────────────────────────────────────── */
+    .console-log {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px; line-height: 1.6;
+      overflow-y: auto; max-height: 520px;
+      background: var(--vscode-terminal-background, rgba(0,0,0,0.15));
+      border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+      border-radius: 3px; padding: 8px 10px;
+    }
+    .ce { margin-bottom: 1px; word-break: break-all; }
+    .ce-ts { opacity: 0.35; font-size: 10px; margin-right: 5px; user-select: none; }
+    .ce.task-start { color: #3fb950; font-weight: 600; }
+    .ce.tool-call  { color: #79c0ff; }
+    .ce.tool-result { color: #8b949e; font-size: 10.5px; padding-left: 12px; }
+    .ce.response   { color: var(--vscode-foreground); opacity: 0.8; }
+    .ce.tokens     { color: #d2a8ff; font-size: 10px; opacity: 0.55; }
+    .ce.task-end   { color: #3fb950; font-weight: 600; border-top: 1px solid rgba(63,185,80,0.25); margin-top: 4px; padding-top: 4px; }
+    .ce.task-killed { color: #f14c4c; font-weight: 600; }
+
     /* ── Stop button ──────────────────────────────────────── */
     .btn-stop {
       margin-left: auto; padding: 3px 9px;
@@ -569,6 +593,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="config">Config</button>
     <button class="tab-btn" data-tab="history">History</button>
+    <button class="tab-btn" data-tab="console">Console</button>
     <button class="btn-stop" id="stopBtn" title="No task running">⬛ Stop</button>
   </div>
 
@@ -696,6 +721,17 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
+  <!-- Console panel -->
+  <div id="consolePanel" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <label style="margin:0">Live Output</label>
+      <button class="btn-refresh" id="clearConsole" title="Clear log">✕ Clear</button>
+    </div>
+    <div id="consoleLog" class="console-log">
+      <p class="history-empty">No task running — output will appear here.</p>
+    </div>
+  </div>
+
 <script nonce="${nonce}">
   const vscode        = acquireVsCodeApi();
   const apiKeyInput   = document.getElementById('apiKey');
@@ -728,6 +764,58 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       hideApproval();
     }
   });
+
+  const consolePanel  = document.getElementById('consolePanel');
+  const consoleLogEl  = document.getElementById('consoleLog');
+  const clearConsoleB = document.getElementById('clearConsole');
+
+  clearConsoleB.addEventListener('click', () => {
+    consoleLogEl.innerHTML = '<p class="history-empty">Log cleared.</p>';
+  });
+
+  function appendConsole(eventType, data) {
+    // Clear placeholder on first real entry
+    if (consoleLogEl.querySelector('.history-empty')) consoleLogEl.innerHTML = '';
+
+    const entry = document.createElement('div');
+    entry.className = 'ce ' + eventType.replace(/_/g, '-');
+
+    const now = new Date();
+    const ts  = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    let text = '';
+    switch (eventType) {
+      case 'task_start':
+        text = '▶ ' + String(data.prompt || '').slice(0, 100) + (String(data.prompt || '').length > 100 ? '…' : '');
+        break;
+      case 'tool_call': {
+        const argsStr = JSON.stringify(data.args || {});
+        text = '⚙ ' + String(data.name) + '  ' + argsStr.slice(0, 120) + (argsStr.length > 120 ? '…' : '');
+        break;
+      }
+      case 'tool_result':
+        text = '↳ ' + String(data.result || '').replace(/\\n/g, ' ').slice(0, 140) + (String(data.result || '').length > 140 ? '…' : '');
+        break;
+      case 'response':
+        text = '💬 ' + String(data.content || '').replace(/\\n/g, ' ').slice(0, 140);
+        break;
+      case 'tokens':
+        text = '⬡ iter ' + data.iteration + '  in=' + data.input + '  out=' + data.output;
+        break;
+      case 'task_end':
+        text = '✓ ' + String(data.summary || '').slice(0, 140) + '  ($' + Number(data.costUsd || 0).toFixed(5) + ')';
+        break;
+      case 'task_killed':
+        text = '⬛ Stopped by user';
+        break;
+      default:
+        text = JSON.stringify(data).slice(0, 160);
+    }
+
+    entry.innerHTML = '<span class="ce-ts">' + ts + '</span>' + esc(text);
+    consoleLogEl.appendChild(entry);
+    consoleLogEl.scrollTop = consoleLogEl.scrollHeight;
+  }
 
   let selectedScopes = new Set();
   let currentAllowCommands = [];
@@ -842,6 +930,18 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     if (msg.type === 'taskRunning') {
       stopBtn.classList.toggle('running', !!msg.running);
       stopBtn.title = msg.running ? 'Stop running DeepSeek task' : 'No task running';
+    }
+
+    if (msg.type === 'consoleEvent') {
+      appendConsole(msg.eventType, msg.data || {});
+      // Auto-switch to console tab when a task starts
+      if (msg.eventType === 'task_start') {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelector('[data-tab="console"]').classList.add('active');
+        configPanel.style.display  = 'none';
+        historyPanel.style.display = 'none';
+        consolePanel.style.display = '';
+      }
     }
 
     if (msg.type === 'validateResults') {
@@ -1008,6 +1108,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const tab = btn.dataset.tab;
       configPanel.style.display  = tab === 'config'  ? '' : 'none';
       historyPanel.style.display = tab === 'history' ? '' : 'none';
+      consolePanel.style.display = tab === 'console' ? '' : 'none';
       if (tab === 'history') vscode.postMessage({ type: 'loadHistory' });
     });
   });

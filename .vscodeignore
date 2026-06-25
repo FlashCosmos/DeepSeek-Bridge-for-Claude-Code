@@ -7,4 +7,10 @@ tsconfig.json
 **/*.ts
 *.vsix
 PUBLISHING.md
+CODE-INDEX.md
+DEEPSEEK-MCP-IMPROVEMENTS.md
+TODO.md
+.deepseek-audit.log
+media/architecture.svg
+media/architecture.png
 !out/**
