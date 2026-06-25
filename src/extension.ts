@@ -16,8 +16,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const apiKey = await context.secrets.get('deepseek-api-key');
     const model = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
     const posture = context.globalState.get<string>('deepseek-posture') ?? 'edit';
+    const allowCommands = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
     if (apiKey) {
-        writeMcpConfig(context, apiKey, model, posture);
+        writeMcpConfig(context, apiKey, model, posture, allowCommands);
     }
 
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);

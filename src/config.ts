@@ -6,7 +6,8 @@ export function writeMcpConfig(
     context: vscode.ExtensionContext,
     apiKey: string,
     model: string,
-    posture: string
+    posture: string,
+    allowCommands: string[]
 ): void {
     const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
     const serverPath = path.join(context.extensionUri.fsPath, 'out', 'server.js');
@@ -29,7 +30,8 @@ export function writeMcpConfig(
             env: {
                 DEEPSEEK_API_KEY: apiKey,
                 DEEPSEEK_MODEL: model,
-                DEEPSEEK_POSTURE: posture === 'read-only' ? 'read-only' : 'edit'
+                DEEPSEEK_POSTURE: posture === 'read-only' ? 'read-only' : 'edit',
+                ...(allowCommands.length ? { DEEPSEEK_ALLOW_COMMANDS: JSON.stringify(allowCommands) } : {})
             }
         }
     };

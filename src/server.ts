@@ -4,6 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import { createJail } from './jail';
 import { isWorkspaceEnabled } from './control';
 
@@ -12,6 +13,17 @@ import { isWorkspaceEnabled } from './control';
 const API_KEY = process.env['DEEPSEEK_API_KEY'];
 const MODEL   = process.env['DEEPSEEK_MODEL'] ?? 'deepseek-v4-flash';
 const RAW_POSTURE = (process.env['DEEPSEEK_POSTURE'] ?? 'edit').toLowerCase();
+
+// Allowlisted shell commands DeepSeek may run for self-verification.
+// Off by default — only active when the user explicitly configures entries.
+let ALLOW_COMMANDS: string[] = [];
+try {
+    const raw = process.env['DEEPSEEK_ALLOW_COMMANDS'] ?? '';
+    if (raw) {
+        const parsed = JSON.parse(raw);
+        ALLOW_COMMANDS = Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === 'string') : [];
+    }
+} catch { ALLOW_COMMANDS = []; }
 
 const WORKSPACE_RAW =
     process.env['CLAUDE_PROJECT_DIR'] ??
@@ -187,6 +199,59 @@ function toolWriteFile(
     return `Written ${bytes} bytes to ${relPath}`;
 }
 
+function parseArgv(cmd: string): string[] {
+    const argv: string[] = [];
+    let current = '';
+    let quote: '"' | "'" | null = null;
+    for (const ch of cmd) {
+        if (quote) {
+            if (ch === quote) quote = null;
+            else current += ch;
+        } else if (ch === '"' || ch === "'") {
+            quote = ch;
+        } else if (ch === ' ') {
+            if (current) { argv.push(current); current = ''; }
+        } else {
+            current += ch;
+        }
+    }
+    if (current) argv.push(current);
+    return argv;
+}
+
+function toolRunCommand(args: Record<string, unknown>): string {
+    const command = String(args['command'] ?? '').trim();
+    if (!command) throw new Error('command must be a non-empty string');
+
+    const allowed = ALLOW_COMMANDS.find(
+        entry => command === entry || command.startsWith(entry + ' ')
+    );
+    if (!allowed) {
+        throw new Error(
+            `'${command}' is not in the allowed command list.\n` +
+            `Allowed prefixes: ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}`
+        );
+    }
+
+    const argv = parseArgv(command);
+    if (!argv.length) throw new Error('empty command after parsing');
+    const [exe, ...rest] = argv;
+
+    const proc = spawnSync(exe, rest, {
+        cwd:       ROOT,
+        encoding:  'utf8',
+        timeout:   60_000,
+        maxBuffer: 1024 * 1024,
+        shell:     false,
+    });
+
+    const out    = (proc.stdout ?? '').trim();
+    const err    = (proc.stderr ?? '').trim();
+    const status = proc.status ?? 'unknown';
+    const combined = [out, err].filter(Boolean).join('\n');
+    return `[exit: ${status}]${combined ? '\n' + combined : ''}`;
+}
+
 function executeTool(
     name:     string,
     args:     Record<string, unknown>,
@@ -198,6 +263,7 @@ function executeTool(
         if (name === 'list_directory') return toolListDirectory(args);
         if (name === 'read_file')      return toolReadFile(args);
         if (name === 'write_file')     return toolWriteFile(args, policy, manifest);
+        if (name === 'run_command')    return toolRunCommand(args);
         return `Error: unknown tool ${name}`;
     } catch (err: unknown) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -253,6 +319,26 @@ function agentTools(policy: CallPolicy): OpenAI.Chat.ChatCompletionTool[] {
             }
         });
     }
+    if (ALLOW_COMMANDS.length > 0) {
+        tools.push({
+            type: 'function',
+            function: {
+                name: 'run_command',
+                description:
+                    'Run an allowlisted shell command in the workspace root for self-verification. ' +
+                    `Allowed: ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}. ` +
+                    'Extra arguments are permitted after the listed prefix. No arbitrary shell.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        command: { type: 'string', description: 'Command to run — must start with an allowed prefix' }
+                    },
+                    required: ['command']
+                }
+            }
+        });
+    }
+
     return tools;
 }
 
@@ -383,8 +469,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             name: 'run_deepseek_task',
             description:
                 'Delegate an autonomous file-based coding chore to DeepSeek to save Claude tokens. ' +
-                `Confined to the workspace (${ROOT}). No shell, no network; secret files are blocked. ` +
+                `Confined to the workspace (${ROOT}). No network; secret files are blocked. ` +
                 `Server max posture: ${MAX_POSTURE}. ` +
+                (ALLOW_COMMANDS.length
+                    ? `Shell self-verify enabled — allowed: ${ALLOW_COMMANDS.map(c => `'${c}'`).join(', ')}. `
+                    : 'No shell access. ') +
                 'Returns a structured manifest (created/modified/skipped files) plus a prose summary. ' +
                 'Use for: refactors, codegen, multi-file edits, analysis, summarization of large file sets.',
             inputSchema: {
