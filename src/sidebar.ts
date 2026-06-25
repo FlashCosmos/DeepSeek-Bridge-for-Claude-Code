@@ -472,13 +472,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
     <div class="field">
       <label>Auto-approved Commands</label>
-      <ul class="cmd-list" id="cmdList">
-        <li><p class="cmd-empty">No commands — DeepSeek will prompt for each.</p></li>
-      </ul>
-      <div class="input-row">
+      <div class="input-row" style="margin-bottom:6px">
         <input type="text" id="addCmdInput" placeholder="e.g. node, git, npm test" spellcheck="false" />
         <button class="icon-btn" id="addCmdBtn" title="Add command">＋</button>
       </div>
+      <ul class="cmd-list" id="cmdList">
+        <li><p class="cmd-empty">No commands — DeepSeek will prompt for each.</p></li>
+      </ul>
       <p class="hint">Prefix approved — "node" allows all node commands.</p>
     </div>
 
