@@ -38,7 +38,8 @@ DeepSeek Bridge connects [Claude Code](https://claude.com/claude-code) to [DeepS
 ### Prerequisites
 - [Claude Code](https://claude.com/claude-code) extension for VS Code
 - A [DeepSeek API key](https://platform.deepseek.com/api_keys) — sign up at platform.deepseek.com, go to **API Keys**, and create a key
-- Node.js on your `PATH` (the bundled MCP server runs via `node`)
+
+> Node.js is **not** a separate requirement — Claude Code already includes it.
 
 ### Steps
 
@@ -302,6 +303,8 @@ Pricing is hardcoded in `server.ts` (prices per 1M tokens in USD):
 ---
 
 ## Development
+
+> These steps are only needed if you want to build or modify the extension from source. Regular users installing from the Marketplace don't need any of this.
 
 ### Prerequisites
 
