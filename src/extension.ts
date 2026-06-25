@@ -58,23 +58,55 @@ function extractExecutable(segment: string): string {
 
 interface ScopeOption { prefix: string; label: string; detail: string; inPath: boolean; }
 
-// Shell built-ins are never on PATH but are valid scope options.
-const SHELL_BUILTINS = new Set(['cd', 'echo', 'export', 'set', 'pwd', 'source', 'alias', 'unset', 'exit', 'return']);
+// Shell built-ins are not standalone executables on PATH but are valid scope options.
+const SHELL_BUILTINS = new Set([
+    // POSIX / bash / zsh navigation & flow
+    'cd', 'pwd', 'pushd', 'popd', 'dirs',
+    // Output
+    'echo', 'printf',
+    // Variables & environment
+    'export', 'set', 'unset', 'declare', 'local', 'typeset', 'readonly', 'let',
+    // Control flow
+    'exit', 'return', 'break', 'continue', 'shift', 'getopts',
+    // Process / job control
+    'exec', 'eval', 'wait', 'jobs', 'bg', 'fg', 'kill', 'trap', 'times', 'suspend',
+    // Aliases & functions
+    'alias', 'unalias', 'source', 'type', 'hash', 'command', 'builtin', 'enable',
+    // System limits
+    'ulimit', 'umask',
+    // Misc
+    'true', 'false', 'test', 'read', 'readarray', 'mapfile',
+    'history', 'fc', 'help', 'logout', 'compgen', 'complete',
+]);
+
+// Commands that wrap another command — unwrap to also offer the inner executable.
+const PRIVILEGE_ESCALATORS = new Set(['sudo', 'doas', 'su', 'run', 'env', 'nice', 'ionice', 'nohup', 'xargs']);
 
 // Check if an executable name is findable on the system PATH (or is a known shell built-in).
 function isInPath(exe: string): boolean {
-    if (!exe || exe.includes('/') || exe.includes('\\')) return false;
+    if (!exe) return false;
+    // Relative-path scripts (./gradlew, ./artisan, ../tools/build.sh) — always offer them.
+    if (exe.startsWith('./') || exe.startsWith('../')) return true;
+    // Absolute paths are not offered as "any X" scope options.
+    if (exe.includes('/') || exe.includes('\\')) return false;
     if (SHELL_BUILTINS.has(exe.toLowerCase())) return true;
+    // Strip common Windows extensions before PATH lookup (node.exe → node).
+    const normalized = exe.replace(/\.(exe|cmd|bat|ps1)$/i, '');
     try {
-        const cmd = process.platform === 'win32' ? `where "${exe}"` : `which "${exe}"`;
+        const cmd = process.platform === 'win32' ? `where "${normalized}"` : `which "${normalized}"`;
         execSync(cmd, { stdio: 'pipe', timeout: 2000 });
         return true;
     } catch { return false; }
 }
 
+function addScopeOption(options: ScopeOption[], seen: Set<string>, exe: string): void {
+    if (!exe || seen.has(exe) || !isInPath(exe)) return;
+    seen.add(exe);
+    options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command`, inPath: true });
+}
+
 // Build the list of scope options: exact full command + deduplicated executables.
-// Only real PATH executables are offered as "any X" scope options — tokens that
-// aren't on PATH (PowerShell sub-commands, keywords, script args) are skipped.
+// Handles shell built-ins, relative-path scripts, privilege escalators, and .exe extensions.
 function buildScopeOptions(command: string): ScopeOption[] {
     const options: ScopeOption[] = [];
     const seen = new Set<string>();
@@ -84,9 +116,21 @@ function buildScopeOptions(command: string): ScopeOption[] {
 
     for (const seg of parseSegments(command)) {
         const exe = extractExecutable(seg);
-        if (exe && !seen.has(exe) && isInPath(exe)) {
-            seen.add(exe);
-            options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command`, inPath: true });
+        if (!exe) continue;
+
+        // For privilege escalators (sudo, env, nohup…) also offer the wrapped command.
+        if (PRIVILEGE_ESCALATORS.has(exe.toLowerCase())) {
+            addScopeOption(options, seen, exe);
+            // Find the first non-flag, non-env-var token after the escalator.
+            const tokens = seg.split(/\s+/).slice(1);
+            for (const tok of tokens) {
+                if (!tok.startsWith('-') && !tok.includes('=')) {
+                    addScopeOption(options, seen, tok);
+                    break;
+                }
+            }
+        } else {
+            addScopeOption(options, seen, exe);
         }
     }
 

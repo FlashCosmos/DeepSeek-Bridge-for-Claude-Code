@@ -794,10 +794,10 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         break;
       }
       case 'tool_result':
-        text = '↳ ' + String(data.result || '').replace(/\\n/g, ' ').slice(0, 140) + (String(data.result || '').length > 140 ? '…' : '');
+        text = '↳ ' + String(data.result || '').replace(/\n/g, ' ').slice(0, 140) + (String(data.result || '').length > 140 ? '…' : '');
         break;
       case 'response':
-        text = '💬 ' + String(data.content || '').replace(/\\n/g, ' ').slice(0, 140);
+        text = '💬 ' + String(data.content || '').replace(/\n/g, ' ').slice(0, 140);
         break;
       case 'tokens':
         text = '⬡ iter ' + data.iteration + '  in=' + data.input + '  out=' + data.output;
