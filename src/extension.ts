@@ -91,22 +91,23 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
 
         provider.setBadge(0);
 
-        if (!result) {
+        if (!result || !result.scopes.length) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'deny' }));
             return;
         }
 
-        const { scope: chosenPrefix, duration: action } = result;
+        const { scopes: chosenPrefixes, duration: action } = result;
 
         if (action === 'session' || action === 'always') {
-            sessionApproved.add(chosenPrefix);
+            chosenPrefixes.forEach(p => sessionApproved.add(p));
         }
 
         if (action === 'always') {
             const existing = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
-            if (!existing.includes(chosenPrefix)) {
-                const updated = [...existing, chosenPrefix];
+            const toAdd    = chosenPrefixes.filter(p => !existing.includes(p));
+            if (toAdd.length) {
+                const updated = [...existing, ...toAdd];
                 await context.globalState.update('deepseek-allow-commands', updated);
                 const apiKey  = await context.secrets.get('deepseek-api-key');
                 const model   = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
@@ -117,7 +118,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ decision: 'allow', approvedPrefix: chosenPrefix }));
+        res.end(JSON.stringify({ decision: 'allow', approvedPrefix: chosenPrefixes[0] }));
     });
 
     await new Promise<void>((resolve, reject) => {

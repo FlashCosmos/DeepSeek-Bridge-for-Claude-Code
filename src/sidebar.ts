@@ -8,7 +8,7 @@ const MODELS = [
     { id: 'deepseek-v4-pro',   label: 'V4 Pro — Advanced reasoning' },
 ];
 
-type ApprovalResult = { scope: string; duration: 'once' | 'session' | 'always' };
+type ApprovalResult = { scopes: string[]; duration: 'once' | 'session' | 'always' };
 
 export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     private webviewView: vscode.WebviewView | null = null;
@@ -131,7 +131,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             if (msg.type === 'approvalResponse') {
                 if (this.pendingApproval) {
                     this.pendingApproval({
-                        scope:    msg.scope    ?? '',
+                        scopes:   (msg as unknown as { scopes?: string[] }).scopes ?? [],
                         duration: (msg.duration ?? 'once') as ApprovalResult['duration'],
                     });
                     this.pendingApproval = null;
@@ -316,7 +316,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       outline: none; appearance: none;
     }
     input[type="text"]:focus, input[type="password"]:focus, select:focus { border-color: var(--vscode-focusBorder); }
-    input[type="radio"] { width: auto; padding: 0; flex-shrink: 0; }
+    input[type="radio"], input[type="checkbox"] { width: auto; padding: 0; flex-shrink: 0; }
     input[type="password"], input[type="text"] {
       font-family: var(--vscode-editor-font-family, monospace);
       letter-spacing: 0.02em;
@@ -515,7 +515,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   const allowBtn        = document.getElementById('allowBtn');
   const denyBtn         = document.getElementById('denyBtn');
 
-  let selectedScope    = null;
+  let selectedScopes   = new Set();
   let selectedDuration = 'once';
 
   vscode.postMessage({ type: 'load' });
@@ -523,7 +523,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   // ── Approval card ──────────────────────────────────────────────────────────
 
   function showApproval(command, scopes) {
-    selectedScope    = scopes[0]?.prefix ?? null;
+    selectedScopes   = new Set([scopes[0]?.prefix].filter(Boolean));
     selectedDuration = 'once';
 
     approvalCmd.textContent = command;
@@ -533,18 +533,18 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const detail = esc(s.detail);
       return \`<label class="scope-option\${i === 0 ? ' selected' : ''}">
         <div class="scope-row">
-          <input type="radio" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
+          <input type="checkbox" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
           <span class="scope-prefix">\${safe}</span>
         </div>
         <div class="scope-detail">\${detail}</div>
       </label>\`;
     }).join('');
 
-    approvalScopes.querySelectorAll('input[name="scope"]').forEach(radio => {
-      radio.addEventListener('change', () => {
-        selectedScope = radio.value;
-        approvalScopes.querySelectorAll('.scope-option').forEach(o => o.classList.remove('selected'));
-        radio.closest('.scope-option').classList.add('selected');
+    approvalScopes.querySelectorAll('input[name="scope"]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) { selectedScopes.add(cb.value); }
+        else            { selectedScopes.delete(cb.value); }
+        cb.closest('.scope-option').classList.toggle('selected', cb.checked);
       });
     });
 
@@ -557,7 +557,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   function hideApproval() {
     approvalOverlay.style.display = 'none';
-    selectedScope = null;
+    selectedScopes = new Set();
   }
 
   durationRow.querySelectorAll('.dur-btn').forEach(btn => {
@@ -569,8 +569,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   });
 
   allowBtn.addEventListener('click', () => {
-    if (!selectedScope) return;
-    vscode.postMessage({ type: 'approvalResponse', scope: selectedScope, duration: selectedDuration });
+    if (!selectedScopes.size) return;
+    vscode.postMessage({ type: 'approvalResponse', scopes: [...selectedScopes], duration: selectedDuration });
     hideApproval();
   });
 
