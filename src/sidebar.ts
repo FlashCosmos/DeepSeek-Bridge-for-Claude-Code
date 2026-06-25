@@ -189,7 +189,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     .ap-header {
       display: flex; align-items: center; gap: 7px;
       padding: 9px 12px;
-      background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 12%, transparent);
+      background: rgba(0, 122, 204, 0.12);
       font-weight: 600; font-size: 12px;
     }
     .ap-pulse {
@@ -229,11 +229,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     }
     .scope-option:hover { background: var(--vscode-list-hoverBackground); }
     .scope-option.selected {
-      background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 10%, transparent);
-      border-color: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 35%, transparent);
+      background: rgba(0, 122, 204, 0.10);
+      border-color: rgba(0, 122, 204, 0.35);
     }
     .scope-option input[type="radio"] { margin-top: 2px; flex-shrink: 0; accent-color: var(--vscode-focusBorder, #007acc); }
-    .scope-content { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .scope-content { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; overflow: hidden; }
     .scope-prefix {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11.5px; word-break: break-all;
