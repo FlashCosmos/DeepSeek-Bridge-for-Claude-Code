@@ -82,47 +82,22 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
             return;
         }
 
-        // ── Step 1: what scope to allow ────────────────────────────────────────
-        const cmdLabel = command.length > 55 ? command.slice(0, 52) + '…' : command;
-        interface ScopeItem extends vscode.QuickPickItem { prefix: string | null; }
-        const scopeItems: ScopeItem[] = [
-            ...buildScopeOptions(command).map(o => ({
-                label:  o.label,
-                detail: o.detail,
-                prefix: o.prefix,
-            })),
-            { label: '$(x) Deny', detail: 'Block this command', prefix: null },
-        ];
+        // Reveal the sidebar and show the approval card.
+        const scopes = buildScopeOptions(command).map(o => ({ prefix: o.prefix, detail: o.detail }));
+        await vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
+        provider.setBadge(1);
 
-        const scopePicked = await vscode.window.showQuickPick(scopeItems, {
-            title:          `DeepSeek wants to run: ${cmdLabel}`,
-            placeHolder:    'What should be allowed?',
-            ignoreFocusOut: true,
-        });
+        const result = await provider.requestApproval(command, scopes);
 
-        if (!scopePicked || scopePicked.prefix === null) {
+        provider.setBadge(0);
+
+        if (!result) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'deny' }));
             return;
         }
 
-        const chosenPrefix = scopePicked.prefix;
-
-        // ── Step 2: for how long ────────────────────────────────────────────────
-        interface DurationItem extends vscode.QuickPickItem { action: 'once' | 'session' | 'always'; }
-        const durationItems: DurationItem[] = [
-            { label: '$(check) Just once',    description: 'Ask again next time',              action: 'once'    },
-            { label: '$(clock) This session', description: 'Auto-approve until VS Code restarts', action: 'session' },
-            { label: '$(star-full) Always',   description: 'Add to permanent allowlist',        action: 'always'  },
-        ];
-        const shortPrefix = chosenPrefix.length > 40 ? chosenPrefix.slice(0, 37) + '…' : chosenPrefix;
-        const durationPicked = await vscode.window.showQuickPick(durationItems, {
-            title:          `Allow "${shortPrefix}" for how long?`,
-            placeHolder:    'Choose duration…',
-            ignoreFocusOut: true,
-        });
-
-        const action = durationPicked?.action ?? 'once';
+        const { scope: chosenPrefix, duration: action } = result;
 
         if (action === 'session' || action === 'always') {
             sessionApproved.add(chosenPrefix);

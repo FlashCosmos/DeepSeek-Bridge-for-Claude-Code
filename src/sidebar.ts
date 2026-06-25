@@ -8,14 +8,37 @@ const MODELS = [
     { id: 'deepseek-v4-pro',   label: 'V4 Pro — Advanced reasoning' },
 ];
 
+type ApprovalResult = { scope: string; duration: 'once' | 'session' | 'always' };
+
 export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     private webviewView: vscode.WebviewView | null = null;
+    private pendingApproval: ((r: ApprovalResult | null) => void) | null = null;
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
-    /** Called by the approval server to update the list in real-time. */
+    /** Push a live update to the allowed-commands list. */
     pushAllowCommands(commands: string[]): void {
         this.webviewView?.webview.postMessage({ type: 'allowCommandsUpdate', commands });
+    }
+
+    /** Show the approval card in the sidebar. Resolves when user responds. */
+    async requestApproval(
+        command: string,
+        scopes: { prefix: string; detail: string }[]
+    ): Promise<ApprovalResult | null> {
+        if (!this.webviewView) return null;
+        return new Promise(resolve => {
+            this.pendingApproval = resolve;
+            this.webviewView!.webview.postMessage({ type: 'approvalRequest', command, scopes });
+        });
+    }
+
+    /** Set or clear the activity-bar badge (pending approval count). */
+    setBadge(count: number): void {
+        if (!this.webviewView) return;
+        this.webviewView.badge = count > 0
+            ? { value: count, tooltip: `${count} command awaiting approval` }
+            : undefined;
     }
 
     async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
@@ -35,6 +58,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             posture?: string;
             command?: string;
             enabled?: boolean;
+            scope?: string;
+            duration?: string;
         }) => {
             if (msg.type === 'load') {
                 const apiKey        = await this.context.secrets.get('deepseek-api-key') ?? '';
@@ -102,6 +127,23 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 await this.saveAllowCommands(updated);
                 webviewView.webview.postMessage({ type: 'allowCommandsUpdate', commands: updated });
             }
+
+            if (msg.type === 'approvalResponse') {
+                if (this.pendingApproval) {
+                    this.pendingApproval({
+                        scope:    msg.scope    ?? '',
+                        duration: (msg.duration ?? 'once') as ApprovalResult['duration'],
+                    });
+                    this.pendingApproval = null;
+                }
+            }
+
+            if (msg.type === 'approvalDeny') {
+                if (this.pendingApproval) {
+                    this.pendingApproval(null);
+                    this.pendingApproval = null;
+                }
+            }
         }, undefined, this.context.subscriptions);
     }
 
@@ -135,6 +177,111 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       line-height: 1.4;
     }
 
+    /* ── Approval overlay ──────────────────────────────────── */
+    #approvalOverlay {
+      display: none;
+      border: 1px solid var(--vscode-focusBorder, #007acc);
+      border-radius: 5px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .ap-header {
+      display: flex; align-items: center; gap: 7px;
+      padding: 9px 12px;
+      background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 12%, transparent);
+      font-weight: 600; font-size: 12px;
+    }
+    .ap-pulse {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--vscode-focusBorder, #007acc);
+      animation: pulse 1.4s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    .ap-cmd {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11.5px;
+      padding: 9px 12px;
+      background: var(--vscode-textCodeBlock-background, rgba(0,0,0,0.2));
+      word-break: break-all; white-space: pre-wrap;
+      border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+      border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+    }
+
+    .ap-section {
+      padding: 10px 12px 4px;
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px; opacity: 0.5;
+    }
+
+    #approvalScopes { padding: 4px 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+
+    .scope-option {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 6px 8px; border-radius: 4px; cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.1s;
+    }
+    .scope-option:hover { background: var(--vscode-list-hoverBackground); }
+    .scope-option.selected {
+      background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 10%, transparent);
+      border-color: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 35%, transparent);
+    }
+    .scope-option input[type="radio"] { margin-top: 2px; flex-shrink: 0; accent-color: var(--vscode-focusBorder, #007acc); }
+    .scope-content { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .scope-prefix {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11.5px; word-break: break-all;
+    }
+    .scope-detail { font-size: 10.5px; opacity: 0.55; }
+
+    .dur-row { display: flex; gap: 4px; padding: 4px 10px 10px; }
+    .dur-btn {
+      flex: 1; padding: 5px 0;
+      background: var(--vscode-input-background);
+      color: var(--vscode-foreground);
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.35));
+      border-radius: 3px; font-family: inherit; font-size: 11.5px;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .dur-btn:hover { background: var(--vscode-list-hoverBackground); }
+    .dur-btn.active {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: var(--vscode-button-background);
+    }
+
+    .ap-actions {
+      display: flex; gap: 6px; padding: 8px 10px;
+      border-top: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
+      background: var(--vscode-input-background);
+    }
+    .btn-allow {
+      flex: 1; padding: 6px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none; border-radius: 3px;
+      font-family: inherit; font-size: inherit; font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-allow:hover { background: var(--vscode-button-hoverBackground); }
+    .btn-deny {
+      flex: 1; padding: 6px;
+      background: none;
+      color: var(--vscode-foreground);
+      border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.35));
+      border-radius: 3px;
+      font-family: inherit; font-size: inherit;
+      cursor: pointer; opacity: 0.7;
+    }
+    .btn-deny:hover { opacity: 1; border-color: #f14c4c; color: #f14c4c; }
+
+    /* ── Config panel ──────────────────────────────────────── */
     .status-bar {
       display: flex; align-items: center; gap: 8px;
       padding: 8px 10px; border-radius: 4px; margin-bottom: 16px;
@@ -223,25 +370,23 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     .switch input:checked  + .slider::before { transform: translateX(16px); }
     .switch input:disabled + .slider         { opacity: .4; cursor: not-allowed; }
 
-    /* Allowed commands list */
-    .cmd-list {
-      list-style: none; display: flex; flex-direction: column;
-      gap: 3px; margin-bottom: 6px;
-    }
+    /* ── Allowed commands list (ZooCode style) ─────────────── */
+    .cmd-list { list-style: none; display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
     .cmd-item {
       display: flex; align-items: center; gap: 6px;
-      padding: 5px 6px 5px 9px;
+      padding: 5px 6px 5px 8px;
       background: var(--vscode-input-background);
       border: 1px solid var(--vscode-input-border, rgba(128,128,128,.2));
       border-radius: 3px;
     }
+    .cmd-check { color: #3fb950; font-size: 12px; flex-shrink: 0; line-height: 1; }
     .cmd-text {
       flex: 1; font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .cmd-del {
       background: none; border: none; cursor: pointer;
-      opacity: 0.4; font-size: 13px; padding: 0 2px;
+      opacity: 0.35; font-size: 12px; padding: 0 2px;
       color: inherit; flex-shrink: 0; line-height: 1;
     }
     .cmd-del:hover { opacity: 1; color: #f14c4c; }
@@ -253,89 +398,187 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 
-  <div class="status-bar unconfigured" id="statusBar">
-    <span class="dot orange" id="statusDot"></span>
-    <span id="statusText">Not configured</span>
-  </div>
-
-  <div class="ws-toggle">
-    <div class="ws-text">
-      <div class="ws-title">Use in this workspace</div>
-      <div class="ws-sub" id="wsName">No folder open</div>
+  <!-- Approval card (shown when DeepSeek needs permission) -->
+  <div id="approvalOverlay">
+    <div class="ap-header">
+      <span class="ap-pulse"></span>
+      <span>Approval Required</span>
     </div>
-    <label class="switch">
-      <input type="checkbox" id="wsEnabled" />
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="field">
-    <label>API Key</label>
-    <div class="input-row">
-      <input type="password" id="apiKey" placeholder="sk-…" autocomplete="off" spellcheck="false" />
-      <button class="icon-btn" id="toggleKey" title="Show / hide key">👁</button>
+    <pre id="approvalCmd" class="ap-cmd"></pre>
+    <p class="ap-section">Allow which scope?</p>
+    <div id="approvalScopes"></div>
+    <p class="ap-section">For how long?</p>
+    <div class="dur-row" id="durationRow">
+      <button class="dur-btn active" data-dur="once">Once</button>
+      <button class="dur-btn" data-dur="session">Session</button>
+      <button class="dur-btn" data-dur="always">Always</button>
     </div>
-    <p class="hint">Get yours at <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com</a></p>
-  </div>
-
-  <div class="field">
-    <label>Model</label>
-    <select id="model">${modelOptions}</select>
-  </div>
-
-  <div class="field">
-    <label>Permissions</label>
-    <select id="posture">
-      <option value="edit">Edit — read &amp; write files (recommended)</option>
-      <option value="read-only">Read-only — read files only</option>
-    </select>
-    <p class="hint" id="postureHint"></p>
-  </div>
-
-  <button class="btn-primary" id="saveBtn">Save &amp; Connect</button>
-
-  <hr class="divider">
-
-  <div class="field">
-    <label>Allowed Commands</label>
-    <ul class="cmd-list" id="cmdList">
-      <li><p class="cmd-empty">No commands — DeepSeek will prompt for approval.</p></li>
-    </ul>
-    <div class="input-row">
-      <input type="text" id="addCmdInput" placeholder="php artisan test" spellcheck="false" />
-      <button class="icon-btn" id="addCmdBtn" title="Add command">＋</button>
+    <div class="ap-actions">
+      <button class="btn-allow" id="allowBtn">Allow</button>
+      <button class="btn-deny"  id="denyBtn">Deny</button>
     </div>
-    <p class="hint">Pre-approved prefixes. Commands will still prompt unless listed here.</p>
   </div>
 
-  <hr class="divider">
+  <!-- Config panel -->
+  <div id="configPanel">
 
-  <p class="info">
-    DeepSeek is jailed to this workspace — no network; secret files
-    (.env, .ssh, .aws, auth.json, keys, .git, SQLite) are blocked.
-  </p>
+    <div class="status-bar unconfigured" id="statusBar">
+      <span class="dot orange" id="statusDot"></span>
+      <span id="statusText">Not configured</span>
+    </div>
+
+    <div class="ws-toggle">
+      <div class="ws-text">
+        <div class="ws-title">Use in this workspace</div>
+        <div class="ws-sub" id="wsName">No folder open</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="wsEnabled" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="field">
+      <label>API Key</label>
+      <div class="input-row">
+        <input type="password" id="apiKey" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+        <button class="icon-btn" id="toggleKey" title="Show / hide key">👁</button>
+      </div>
+      <p class="hint">Get yours at <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com</a></p>
+    </div>
+
+    <div class="field">
+      <label>Model</label>
+      <select id="model">${modelOptions}</select>
+    </div>
+
+    <div class="field">
+      <label>Permissions</label>
+      <select id="posture">
+        <option value="edit">Edit — read &amp; write files (recommended)</option>
+        <option value="read-only">Read-only — read files only</option>
+      </select>
+      <p class="hint" id="postureHint"></p>
+    </div>
+
+    <button class="btn-primary" id="saveBtn">Save &amp; Connect</button>
+
+    <hr class="divider">
+
+    <div class="field">
+      <label>Auto-approved Commands</label>
+      <ul class="cmd-list" id="cmdList">
+        <li><p class="cmd-empty">No commands — DeepSeek will prompt for each.</p></li>
+      </ul>
+      <div class="input-row">
+        <input type="text" id="addCmdInput" placeholder="e.g. node, git, npm test" spellcheck="false" />
+        <button class="icon-btn" id="addCmdBtn" title="Add command">＋</button>
+      </div>
+      <p class="hint">Prefix approved — "node" allows all node commands.</p>
+    </div>
+
+    <hr class="divider">
+
+    <p class="info">
+      DeepSeek is jailed to this workspace — no network; secret files
+      (.env, .ssh, .aws, auth.json, keys, .git, SQLite) are blocked.
+    </p>
+
+  </div>
 
 <script nonce="${nonce}">
-  const vscode       = acquireVsCodeApi();
-  const apiKeyInput  = document.getElementById('apiKey');
-  const modelSelect  = document.getElementById('model');
-  const postureSelect= document.getElementById('posture');
-  const postureHint  = document.getElementById('postureHint');
-  const saveBtn      = document.getElementById('saveBtn');
-  const toggleKey    = document.getElementById('toggleKey');
-  const statusBar    = document.getElementById('statusBar');
-  const statusDot    = document.getElementById('statusDot');
-  const statusText   = document.getElementById('statusText');
-  const wsEnabled    = document.getElementById('wsEnabled');
-  const wsName       = document.getElementById('wsName');
-  const cmdList      = document.getElementById('cmdList');
-  const addCmdInput  = document.getElementById('addCmdInput');
-  const addCmdBtn    = document.getElementById('addCmdBtn');
+  const vscode        = acquireVsCodeApi();
+  const apiKeyInput   = document.getElementById('apiKey');
+  const modelSelect   = document.getElementById('model');
+  const postureSelect = document.getElementById('posture');
+  const postureHint   = document.getElementById('postureHint');
+  const saveBtn       = document.getElementById('saveBtn');
+  const toggleKey     = document.getElementById('toggleKey');
+  const statusBar     = document.getElementById('statusBar');
+  const statusDot     = document.getElementById('statusDot');
+  const statusText    = document.getElementById('statusText');
+  const wsEnabled     = document.getElementById('wsEnabled');
+  const wsName        = document.getElementById('wsName');
+  const cmdList       = document.getElementById('cmdList');
+  const addCmdInput   = document.getElementById('addCmdInput');
+  const addCmdBtn     = document.getElementById('addCmdBtn');
+
+  const approvalOverlay = document.getElementById('approvalOverlay');
+  const approvalCmd     = document.getElementById('approvalCmd');
+  const approvalScopes  = document.getElementById('approvalScopes');
+  const durationRow     = document.getElementById('durationRow');
+  const allowBtn        = document.getElementById('allowBtn');
+  const denyBtn         = document.getElementById('denyBtn');
+
+  let selectedScope    = null;
+  let selectedDuration = 'once';
 
   vscode.postMessage({ type: 'load' });
 
+  // ── Approval card ──────────────────────────────────────────────────────────
+
+  function showApproval(command, scopes) {
+    selectedScope    = scopes[0]?.prefix ?? null;
+    selectedDuration = 'once';
+
+    approvalCmd.textContent = command;
+
+    approvalScopes.innerHTML = scopes.map((s, i) => {
+      const safe   = esc(s.prefix);
+      const detail = esc(s.detail);
+      return \`<label class="scope-option\${i === 0 ? ' selected' : ''}">
+        <input type="radio" name="scope" value="\${safe}" \${i === 0 ? 'checked' : ''}>
+        <div class="scope-content">
+          <span class="scope-prefix">\${safe}</span>
+          <span class="scope-detail">\${detail}</span>
+        </div>
+      </label>\`;
+    }).join('');
+
+    approvalScopes.querySelectorAll('input[name="scope"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        selectedScope = radio.value;
+        approvalScopes.querySelectorAll('.scope-option').forEach(o => o.classList.remove('selected'));
+        radio.closest('.scope-option').classList.add('selected');
+      });
+    });
+
+    durationRow.querySelectorAll('.dur-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.dur === 'once');
+    });
+
+    approvalOverlay.style.display = 'block';
+  }
+
+  function hideApproval() {
+    approvalOverlay.style.display = 'none';
+    selectedScope = null;
+  }
+
+  durationRow.querySelectorAll('.dur-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedDuration = btn.dataset.dur;
+      durationRow.querySelectorAll('.dur-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  allowBtn.addEventListener('click', () => {
+    if (!selectedScope) return;
+    vscode.postMessage({ type: 'approvalResponse', scope: selectedScope, duration: selectedDuration });
+    hideApproval();
+  });
+
+  denyBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'approvalDeny' });
+    hideApproval();
+  });
+
+  // ── Extension messages ─────────────────────────────────────────────────────
+
   window.addEventListener('message', e => {
     const msg = e.data;
+
     if (msg.type === 'config') {
       if (msg.apiKey)  apiKeyInput.value   = msg.apiKey;
       if (msg.model)   modelSelect.value   = msg.model;
@@ -354,19 +597,27 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         wsEnabled.disabled = true;
       }
     }
+
     if (msg.type === 'allowCommandsUpdate') {
       renderCommands(msg.commands || []);
     }
+
+    if (msg.type === 'approvalRequest') {
+      showApproval(msg.command, msg.scopes);
+    }
   });
+
+  // ── Allowed commands (ZooCode style) ──────────────────────────────────────
 
   function renderCommands(commands) {
     if (!commands.length) {
-      cmdList.innerHTML = '<li><p class="cmd-empty">No commands — DeepSeek will prompt for approval.</p></li>';
+      cmdList.innerHTML = '<li><p class="cmd-empty">No commands — DeepSeek will prompt for each.</p></li>';
       return;
     }
     cmdList.innerHTML = commands.map(cmd => {
-      const safe = cmd.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+      const safe = esc(cmd);
       return \`<li class="cmd-item">
+        <span class="cmd-check">✓</span>
         <span class="cmd-text" title="\${safe}">\${safe}</span>
         <button class="cmd-del" data-cmd="\${safe}" title="Remove">✕</button>
       </li>\`;
@@ -387,6 +638,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   addCmdBtn.addEventListener('click', addCommand);
   addCmdInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCommand(); });
+
+  // ── Config controls ────────────────────────────────────────────────────────
 
   wsEnabled.addEventListener('change', () => {
     vscode.postMessage({ type: 'toggleWorkspace', enabled: wsEnabled.checked });
@@ -427,6 +680,10 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       statusDot.className    = 'dot orange';
       statusText.textContent = 'Not configured';
     }
+  }
+
+  function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 </script>
 </body>
