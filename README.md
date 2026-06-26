@@ -106,7 +106,7 @@ DeepSeek runs in a strict sandbox:
 - **No network access** — the agent has no network tools. It can only read/write files and run approved shell commands.
 - **Shell operator splitting** — chained commands (`&&`, `||`, `;`) are split and every segment must be individually approved. Approving `node` cannot be used to sneak through `node good && rm -rf /`.
 - **Audit log** — every tool call is timestamped and logged to `.deepseek-audit.log` in your workspace root.
-- **Iteration cap** — tasks are limited to 80 DeepSeek API round-trips and a 32 MB total data budget to prevent runaway loops.
+- **Runaway guard** — a task runs until DeepSeek signals it's finished. A high round-trip cap and a 128 MB data budget exist only to catch genuine infinite loops; if either is reached, the task pauses and hands back a resume handle so no work is lost.
 
 ---
 

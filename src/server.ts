@@ -254,8 +254,13 @@ const LIMITS = {
     maxReadBytes:      1024 * 1024,
     maxWriteBytes:     1024 * 1024,
     maxResultChars:    8000,
-    sessionByteBudget: 32 * 1024 * 1024,
-    maxIterations:     80,
+    sessionByteBudget: 128 * 1024 * 1024,
+    // Runaway guard, not a task-length limit: a task ends naturally when the
+    // model stops calling tools. This cap only catches genuine infinite loops.
+    maxIterations:     500,
+    // Stop and hand back a resume handle if the model makes this many
+    // consecutive no-progress iterations (only repeated/suppressed calls).
+    maxConsecutiveMistakes: 4,
 };
 
 // ── Glob matching for writePaths ───────────────────────────────────────────────
@@ -580,6 +585,8 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
 
     const tools    = agentTools(policy);
     let finalSummary = '';
+    let stuck = false;
+    let consecutiveMistakes = 0;
 
     for (let i = 0; i < LIMITS.maxIterations; i++) {
         // Check kill file before starting the API call.
@@ -637,6 +644,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         }
 
         let budgetExceeded = false;
+        let madeProgress = false;
         for (const call of msg.tool_calls) {
             let parsed: Record<string, unknown> = {};
             try { parsed = JSON.parse(call.function.arguments) as Record<string, unknown>; } catch { /* ignore */ }
@@ -647,9 +655,12 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
             postEvent('tool_call', { name: call.function.name, args: parsed });
             let result: string;
             try {
-                result = count > 3
-                    ? 'Error: repeated identical tool call suppressed (possible loop)'
-                    : await executeTool(call.function.name, parsed, policy, manifest);
+                if (count > 3) {
+                    result = 'Error: repeated identical tool call suppressed (possible loop)';
+                } else {
+                    result = await executeTool(call.function.name, parsed, policy, manifest);
+                    madeProgress = true;
+                }
             } catch (e) {
                 if ((e as Error).message === 'session byte budget exceeded') {
                     budgetExceeded = true;
@@ -667,6 +678,16 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
             });
         }
         if (budgetExceeded) break;
+
+        // Loop detection: if an iteration produced only suppressed/repeated
+        // calls, the model is spinning. After several in a row, stop and let
+        // the resume handle take over rather than grinding to maxIterations.
+        if (madeProgress) {
+            consecutiveMistakes = 0;
+        } else {
+            consecutiveMistakes++;
+            if (consecutiveMistakes >= LIMITS.maxConsecutiveMistakes) { stuck = true; break; }
+        }
     }
 
     let resumeId: string | undefined;
@@ -688,9 +709,12 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         } catch {
             resumeId = undefined;
         }
+        const reason = stuck
+            ? `Agent stopped: it repeated the same tool calls ${LIMITS.maxConsecutiveMistakes} times in a row without progress (likely stuck). Adding a steering hint when you resume usually unblocks it.`
+            : `Agent paused after hitting the iteration limit.`;
         finalSummary = resumeId
-            ? `Agent paused after hitting the iteration limit. ${touchedStr}\n\nResume ID: ${resumeId}\nCall run_deepseek_task with { resumeId: "${resumeId}" } to continue exactly where it stopped — same context, no re-reading files.`
-            : `Agent stopped (iteration or data budget reached). ${touchedStr} Decompose into smaller tasks for reliable completion.`;
+            ? `${reason} ${touchedStr}\n\nResume ID: ${resumeId}\nCall run_deepseek_task with { resumeId: "${resumeId}" } to continue exactly where it stopped — same context, no re-reading files.`
+            : `${reason} ${touchedStr} Decompose into smaller tasks for reliable completion.`;
     }
 
     postEvent('task_end', {
