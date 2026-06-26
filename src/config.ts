@@ -2,6 +2,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
+/**
+ * Recover an API key previously written into ~/.claude.json by an earlier
+ * install. Used to self-heal when SecretStorage is empty after a publisher/ID
+ * change (SecretStorage is keyed by extension ID, so a rename loses the key).
+ */
+export function readExistingMcpKey(): string | undefined {
+    const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
+    const claudeJsonPath = path.join(home, '.claude.json');
+    try {
+        const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf8')) as Record<string, unknown>;
+        const servers = claudeJson.mcpServers as Record<string, { env?: Record<string, string> }> | undefined;
+        const key = servers?.deepseek?.env?.DEEPSEEK_API_KEY;
+        return typeof key === 'string' && key.trim() ? key.trim() : undefined;
+    } catch { return undefined; }
+}
+
 export function writeMcpConfig(
     context: vscode.ExtensionContext,
     apiKey: string,

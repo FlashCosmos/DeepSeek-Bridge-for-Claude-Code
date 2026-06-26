@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { DeepSeekSidebarProvider } from './sidebar';
-import { writeMcpConfig } from './config';
+import { writeMcpConfig, readExistingMcpKey } from './config';
 import { isWorkspaceEnabled } from './control';
 
 const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
@@ -257,10 +257,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     await startApprovalServer(context, provider);
 
-    const apiKey       = await context.secrets.get('deepseek-api-key');
+    let apiKey         = await context.secrets.get('deepseek-api-key');
+    // Self-heal: if SecretStorage is empty (e.g. after a publisher/ID change,
+    // which resets per-extension secrets) but a key exists in ~/.claude.json
+    // from a previous install, migrate it back so the path refresh below runs.
+    if (!apiKey) {
+        const recovered = readExistingMcpKey();
+        if (recovered) {
+            await context.secrets.store('deepseek-api-key', recovered);
+            apiKey = recovered;
+        }
+    }
     const model        = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
     const posture      = context.globalState.get<string>('deepseek-posture') ?? 'edit';
     const allowCommands = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
+    // Always refresh the MCP config on activation so the server.js path tracks
+    // the currently-installed extension version (the path changes every update).
     if (apiKey) {
         writeMcpConfig(context, apiKey, model, posture, allowCommands);
     }
