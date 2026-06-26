@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { writeMcpConfig } from './config';
+import { writeMcpConfig, readExistingMcpKey } from './config';
 import { isWorkspaceEnabled, setWorkspaceEnabled } from './control';
 
 const HISTORY_FILE = path.join(os.homedir(), '.claude', 'deepseek-history.json');
@@ -77,7 +77,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             duration?: string;
         }) => {
             if (msg.type === 'load') {
-                const apiKey        = await this.context.secrets.get('deepseek-api-key') ?? '';
+                // SecretStorage is the preferred store, but it has no backend on
+                // headless remotes (no libsecret/keyring), so it can read back
+                // empty even when the bridge is configured. Fall back to the key
+                // persisted in ~/.claude.json — the source of truth Claude Code reads.
+                let apiKey: string;
+                try { apiKey = await this.context.secrets.get('deepseek-api-key') ?? ''; } catch { apiKey = ''; }
+                if (!apiKey) apiKey = readExistingMcpKey() ?? '';
                 const model         = this.context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
                 const posture       = this.context.globalState.get<string>('deepseek-posture') ?? 'edit';
                 const allowCommands = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
@@ -106,24 +112,38 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 const model   = msg.model ?? 'deepseek-v4-flash';
                 const posture = msg.posture === 'read-only' ? 'read-only' : 'edit';
 
-                if (apiKey) {
-                    await this.context.secrets.store('deepseek-api-key', apiKey);
-                } else {
-                    await this.context.secrets.delete('deepseek-api-key');
-                }
+                // Persist to SecretStorage as a best-effort cache. On headless
+                // remotes without a keyring this can throw or silently no-op, so
+                // it must NOT block writing the MCP config below — that file
+                // (~/.claude.json) is the real source of truth Claude Code reads.
+                try {
+                    if (apiKey) await this.context.secrets.store('deepseek-api-key', apiKey);
+                    else        await this.context.secrets.delete('deepseek-api-key');
+                } catch { /* no keyring backend — config write below is authoritative */ }
                 await this.context.globalState.update('deepseek-model', model);
                 await this.context.globalState.update('deepseek-posture', posture);
 
                 if (apiKey) {
                     const allowCommands = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
                     const fullPermissions = this.context.globalState.get<boolean>('deepseek-full-permissions') ?? false;
-                    writeMcpConfig(this.context, apiKey, model, posture, allowCommands, fullPermissions);
-                    const action = await vscode.window.showInformationMessage(
-                        'DeepSeek Bridge saved. Restart Claude Code to apply changes.',
-                        'OK'
-                    );
-                    void action;
+                    let saveError = '';
+                    try {
+                        writeMcpConfig(this.context, apiKey, model, posture, allowCommands, fullPermissions);
+                    } catch (e) {
+                        saveError = (e as Error).message;
+                    }
+                    // Echo the saved state back so the webview reflects "Active"
+                    // even when SecretStorage can't be read back on reload.
+                    webviewView.webview.postMessage({ type: 'saved', ok: !saveError, apiKey, model });
+                    if (saveError) {
+                        vscode.window.showErrorMessage(`DeepSeek Bridge: could not write config — ${saveError}`);
+                    } else {
+                        void vscode.window.showInformationMessage(
+                            'DeepSeek Bridge saved. Restart Claude Code to apply changes.', 'OK'
+                        );
+                    }
                 } else {
+                    webviewView.webview.postMessage({ type: 'saved', ok: false, apiKey: '', model });
                     vscode.window.showWarningMessage('DeepSeek Bridge: API key removed.');
                 }
             }
@@ -911,6 +931,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         wsEnabled.checked  = false;
         wsEnabled.disabled = true;
       }
+    }
+
+    if (msg.type === 'saved') {
+      // Backend confirms the config was written (authoritative even when
+      // SecretStorage can't be read back). Reflect the real status.
+      if (msg.apiKey) apiKeyInput.value = msg.apiKey;
+      setStatus(msg.ok && !!msg.apiKey, msg.model);
     }
 
     if (msg.type === 'allowCommandsUpdate') {

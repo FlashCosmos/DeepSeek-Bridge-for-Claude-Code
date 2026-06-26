@@ -264,7 +264,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!apiKey) {
         const recovered = readExistingMcpKey();
         if (recovered) {
-            await context.secrets.store('deepseek-api-key', recovered);
+            // Best-effort cache; may have no keyring backend on headless remotes.
+            try { await context.secrets.store('deepseek-api-key', recovered); } catch { /* ignore */ }
             apiKey = recovered;
         }
     }
