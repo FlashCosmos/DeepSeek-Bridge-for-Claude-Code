@@ -27,7 +27,6 @@ const ALLOWLIST_FILE   = path.join(CLAUDE_DIR, 'deepseek-allowlist.json'); // le
 const HISTORY_FILE     = path.join(CLAUDE_DIR, 'deepseek-history.json');
 const RESUME_DIR       = CLAUDE_DIR;
 const PORTS_DIR        = path.join(CLAUDE_DIR, 'deepseek-ports');
-const LEGACY_PORT_FILE = path.join(CLAUDE_DIR, 'deepseek-bridge-port');
 const AUDIT_DIR        = path.join(CLAUDE_DIR, 'deepseek-audit');
 
 const WORKSPACE_RAW =
@@ -231,15 +230,14 @@ const sessionApproved = new Set<string>();
 // ── Per-window approval-server endpoint (port + auth token) ─────────────────────
 
 function getApprovalEndpoint(): { port: number; token: string } | null {
+    // Per-window file only: it carries the auth token the approval server requires.
+    // (The legacy token-less global port file would be rejected with 403, so we
+    // don't fall back to it — a clean "no endpoint" degradation beats a 403 storm.)
     try {
         const raw = fs.readFileSync(path.join(PORTS_DIR, `${WS_KEY}.json`), 'utf8');
         const parsed = JSON.parse(raw) as { port?: number; token?: string };
-        if (parsed.port) return { port: parsed.port, token: parsed.token ?? '' };
-    } catch { /* fall through to legacy */ }
-    try {
-        const port = parseInt(fs.readFileSync(LEGACY_PORT_FILE, 'utf8').trim(), 10);
-        if (port && !isNaN(port)) return { port, token: '' };
-    } catch { /* none */ }
+        if (parsed.port && parsed.token) return { port: parsed.port, token: parsed.token };
+    } catch { /* no endpoint available */ }
     return null;
 }
 

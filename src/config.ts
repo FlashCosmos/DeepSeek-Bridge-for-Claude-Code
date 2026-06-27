@@ -176,14 +176,11 @@ export function writePortFile(wsKey: string, port: number, token: string): void 
             JSON.stringify({ port, token }),
             'utf8'
         );
-        // Legacy global file (last-writer-wins) — only carries the port.
-        fs.writeFileSync(path.join(dir, 'deepseek-bridge-port'), String(port), 'utf8');
     } catch { /* non-fatal — allowlist still works without the popup server */ }
 }
 
 export function removePortFile(wsKey: string): void {
     try { fs.unlinkSync(path.join(claudeDir(), 'deepseek-ports', `${wsKey}.json`)); } catch { /* ignore */ }
-    try { fs.unlinkSync(path.join(claudeDir(), 'deepseek-bridge-port')); } catch { /* ignore */ }
 }
 
 export function writeMcpConfig(
