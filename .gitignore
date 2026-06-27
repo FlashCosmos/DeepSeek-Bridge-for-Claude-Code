@@ -2,3 +2,5 @@ node_modules/
 out/
 *.vsix
 .deepseek-audit.log
+PUBLISHING.md
+TODO.md
