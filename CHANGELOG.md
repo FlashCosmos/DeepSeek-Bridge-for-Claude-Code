@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.2.0 — The "seamless & premium" overhaul
+
+### Seamless delegation (the headline)
+- **Automatic offloading.** Bridge now writes a managed, fenced delegation-policy block into your `CLAUDE.md` and sets the MCP server's `instructions`, so Claude offloads heavy file work to DeepSeek **on its own** — you no longer have to say "use DeepSeek." New **Delegation Aggressiveness** setting (Conservative / Balanced / Aggressive) tunes the thresholds; `deepseekBridge.injectGuidance` controls where (or whether) the block is written.
+- **Sharpened, comparative tool descriptions** that tell the planner to prefer delegation over doing the work itself.
+
+### Trustworthy results (so the round-trip actually saves tokens)
+- **Unified diffs in the manifest.** Applied edits return a per-file unified diff; `dryRun` returns diffs for existing files (full content only for new files). Claude reviews changes without re-reading whole files.
+- **Command trust signal.** `run_command` exit codes are surfaced in the manifest (`commandsRun`), so a passing test/lint is visible to Claude.
+- **Optional `selfReview` pass** re-checks completeness before finishing — aimed at the enumeration/indexing tasks that previously dropped methods.
+
+### Correctness & cost
+- **Fixed Claude comparison pricing** (Opus 4.8 $5/$25, Haiku 4.5 $1/$5; Sonnet unchanged) — previous Opus baseline was ~3× too high.
+- **Fixed DeepSeek V4 Pro pricing** to the current permanent rate ($0.003625 / $0.435 / $0.87 per 1M); Flash unchanged. Pricing is now stamped with an "as-of" date.
+- **Honest savings.** The History "Saved" figure is labelled as a gross delta and notes it excludes Claude's review overhead.
+- **`ask_deepseek` now honors model auto-switching** and attributes cost to the model actually used.
+- **Cache ratio shows "unknown"** instead of a misleading 0% when DeepSeek omits cache fields.
+
+### Reliability at scale
+- **Per-window signal files** — Stop in one window can no longer kill another window's task, and approval popups/console events route to the correct window.
+- **Authenticated local channel** — the approval/event server requires a per-session token.
+- **Single-in-flight task guard**, **atomic cost-history writes**, **resume-file garbage collection**, **graceful API-error recovery** (preserves partial work + a resume handle instead of throwing), and **clear feedback on malformed tool-call arguments**.
+- **MCP progress heartbeats** on long tasks so the client keeps the request alive.
+- **Version-independent server path** — an extension auto-update can no longer silently strand the bridge; Bridge also prompts you to reconnect after an update.
+
+### Security & privacy
+- **Data-egress disclosure + one-time consent** before any code is sent to DeepSeek; the misleading "no network" wording is corrected.
+- **Expanded secret denylist** (`.netrc`, `.pgpass`, `kubeconfig`/`.kube`, `*.tfstate`/`*.tfvars`, `serviceAccount*.json`, `wp-config.php`, and more).
+- **Approval card warns** when a broad scope grants arbitrary code execution via a scriptable tool.
+- **Audit log relocated** out of the workspace (to `~/.claude/deepseek-audit/`) so it can't be committed.
+
+### Premium polish
+- **Native VS Code Settings** (`deepseekBridge.*`) — discoverable, searchable, Settings-Sync-able, per-workspace overridable.
+- **Hot-reload** — model/posture/aggressiveness/allow-list changes apply immediately; only an API-key change needs a reconnect.
+- **Getting Started walkthrough**, a full **command palette** surface, **accessible approval card** (role/focus/Escape + aria labels), and a **Copy Diagnostics** command.
+- **Tests + CI** — unit suite for the jail, command allow-list, glob, posture clamp, cost math, diff, and guidance injection; GitHub Actions runs typecheck + tests + bundle, and `vsce package` now gates on `tsc --noEmit`.
+
 ## 1.1.25
 - **Cache-aware cost tracking**. DeepSeek caches prompt prefixes automatically and bills cache hits at ~1/50 of the miss rate. The extension now reads `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` from each response and prices them separately, so the Cost History tab reflects true DeepSeek cost instead of pricing all input at the full rate. The append-only agent loop keeps the prefix stable, so multi-step tasks run mostly on cache hits.
 - **Cache-hit ratio** is now shown per task in the Cost History tab.

@@ -1,0 +1,12 @@
+{
+  "deepseek-bridge.category": "DeepSeek Bridge",
+  "deepseek-bridge.container.title": "DeepSeek Bridge",
+  "deepseek-bridge.view.name": "Configuration",
+  "deepseek-bridge.cmd.openSidebar": "Open Settings",
+  "deepseek-bridge.cmd.setApiKey": "Set API Key",
+  "deepseek-bridge.cmd.openHistory": "Open Cost History",
+  "deepseek-bridge.cmd.stopTask": "Stop Running Task",
+  "deepseek-bridge.cmd.toggleWorkspace": "Enable / Disable for This Workspace",
+  "deepseek-bridge.cmd.reconnect": "Reconnect Claude Code",
+  "deepseek-bridge.cmd.copyDiagnostics": "Copy Diagnostics"
+}

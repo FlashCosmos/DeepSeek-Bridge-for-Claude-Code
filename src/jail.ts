@@ -3,23 +3,42 @@ import * as path from 'path';
 
 // Secret-bearing / persistence-relevant paths blocked even INSIDE the workspace.
 // Tested against the CANONICAL realpath (defeats 8.3 short-names) — both rel and abs forms.
+// NOTE: a path denylist is necessarily non-exhaustive; the UI/README must say so.
 export const DEFAULT_DENY: RegExp[] = [
+    // Environment / package / VCS secrets
     /(^|[\\/])\.env(\.[^\\/]+)?$/i,
     /(^|[\\/])\.git([\\/]|$)/i,
     /\.git-credentials$/i,
+    /\.npmrc$/i,
+    /(^|[\\/])\.netrc$/i,
+    // SSH / cloud provider credentials
     /(^|[\\/])\.ssh([\\/]|$)/i,
     /(^|[\\/])\.aws([\\/]|$)/i,
     /(^|[\\/])\.azure([\\/]|$)/i,
-    /\.npmrc$/i,
+    /(^|[\\/])\.gcloud([\\/]|$)/i,
+    /(^|[\\/])\.kube([\\/]|$)/i,
+    /(^|[\\/])kubeconfig$/i,
+    /(^|[\\/])\.docker([\\/]|$)/i,
+    /(^|[\\/])\.dockercfg$/i,
+    /(^|[\\/])serviceaccount[^\\/]*\.json$/i,   // GCP service account
+    /-key\.json$/i,                              // GCP / generic key material
+    /(^|[\\/])credentials(\.json)?$/i,           // bare credentials file / credentials.json
+    /(^|[\\/])secrets\.(ya?ml|json|env)$/i,
+    // Database / state / app secrets
+    /(^|[\\/])\.pgpass$/i,
+    /\.tfstate(\.backup)?$/i,                     // Terraform state (often holds secrets)
+    /\.tfvars$/i,
+    /(^|[\\/])wp-config\.php$/i,                  // WordPress DB credentials
+    /(^|[\\/])auth\.json$/i,                      // Composer credentials
+    /\.sqlite\d*$/i,                              // SQLite databases
+    // Keys, history, persistence
     /(^|[\\/])\.claude(\.json)?([\\/]|$)/i,
     /_history$/i,
     /(^|[\\/])id_[a-z0-9]+$/i,
     /\.(pem|key|pfx|p12|kdbx|ppk)$/i,
     /(^|[\\/])Startup([\\/]|$)/i,
     /Microsoft\.PowerShell_profile\.ps1$/i,
-    /(^|[\\/])auth\.json$/i,           // Composer credentials
-    /(^|[\\/])storage[\\/]logs([\\/]|$)/i,  // may contain PII
-    /\.sqlite\d*$/i,                   // SQLite databases
+    /(^|[\\/])storage[\\/]logs([\\/]|$)/i,        // may contain PII
 ];
 
 export interface Jail {

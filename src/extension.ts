@@ -3,51 +3,37 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { execSync } from 'child_process';
 import { DeepSeekSidebarProvider } from './sidebar';
-import { writeMcpConfig, readExistingMcpKey } from './config';
-import { isWorkspaceEnabled } from './control';
+import {
+    writeMcpConfig, readExistingMcpKey, readSettings, getInjectTarget,
+    injectGuidance, writePortFile, removePortFile, migrateLegacySettings, updateSetting,
+} from './config';
+import { isWorkspaceEnabled, setWorkspaceEnabled } from './control';
+import { splitSegments, isScriptableExe, commandMatchesAllowlist, workspaceKey } from './pure';
 
-const APPROVAL_PORT_FILE = path.join(os.homedir(), '.claude', 'deepseek-bridge-port');
-const HISTORY_FILE       = path.join(os.homedir(), '.claude', 'deepseek-history.json');
-const KILL_FILE          = path.join(os.homedir(), '.claude', 'deepseek-kill');
+const CLAUDE_DIR   = path.join(os.homedir(), '.claude');
+const AUDIT_DIR    = path.join(CLAUDE_DIR, 'deepseek-audit');
 
-function readHistory(): { version: number; entries: unknown[] } {
-    try {
-        const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
-        return JSON.parse(raw) as { version: number; entries: unknown[] };
-    } catch {
-        return { version: 1, entries: [] };
-    }
+function killFilePath(wsKey: string): string {
+    return path.join(CLAUDE_DIR, `deepseek-kill-${wsKey}`);
 }
+
+function currentWorkspacePath(): string {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+}
+
+// Per-session auth token shared with the MCP server via the per-window port file.
+const SESSION_TOKEN = crypto.randomBytes(24).toString('hex');
 
 // Prefixes approved via popup this VSCode session (forgotten on restart).
-// A prefix like "node" matches "node --version", "node script.js", etc.
 const sessionApproved = new Set<string>();
 
-function segmentMatchesPrefix(segment: string, prefix: string): boolean {
-    return segment === prefix || segment.startsWith(prefix + ' ');
-}
-
-// Split on unambiguous shell operators and require every segment to match a
-// session-approved prefix. Bare | is excluded — see commandMatchesAllowlist
-// in server.ts for the full rationale.
 function isSessionApproved(command: string): boolean {
-    const prefixes = [...sessionApproved];
-    const segments = command.split(/\s*(?:&&|\|\||;)\s*/).map(s => s.trim()).filter(Boolean);
-    return segments.every(seg => prefixes.some(p => segmentMatchesPrefix(seg, p)));
+    return commandMatchesAllowlist(command, sessionApproved);
 }
 
-// Split a shell command string on unambiguous operators into individual segments.
-// Intentionally omits bare | — a pipe inside a quoted argument (e.g. PowerShell
-// -Command "... | Select-String") would otherwise be treated as a shell operator,
-// producing false scope tokens like "Select-String", "const", "interface".
-// The server-side allowlist checker still splits on | for security purposes.
-function parseSegments(command: string): string[] {
-    return command.split(/\s*(?:&&|\|\||;)\s*/).map(s => s.trim()).filter(Boolean);
-}
-
-// Extract the executable name from a command segment (skip env-var prefixes like KEY=val).
 function extractExecutable(segment: string): string {
     const tokens = segment.split(/\s+/);
     for (const tok of tokens) {
@@ -56,41 +42,27 @@ function extractExecutable(segment: string): string {
     return tokens[0] ?? segment;
 }
 
-interface ScopeOption { prefix: string; label: string; detail: string; inPath: boolean; }
+interface ScopeOption { prefix: string; label: string; detail: string; inPath: boolean; dangerous: boolean; }
 
-// Shell built-ins are not standalone executables on PATH but are valid scope options.
 const SHELL_BUILTINS = new Set([
-    // POSIX / bash / zsh navigation & flow
     'cd', 'pwd', 'pushd', 'popd', 'dirs',
-    // Output
     'echo', 'printf',
-    // Variables & environment
     'export', 'set', 'unset', 'declare', 'local', 'typeset', 'readonly', 'let',
-    // Control flow
     'exit', 'return', 'break', 'continue', 'shift', 'getopts',
-    // Process / job control
     'exec', 'eval', 'wait', 'jobs', 'bg', 'fg', 'kill', 'trap', 'times', 'suspend',
-    // Aliases & functions
     'alias', 'unalias', 'source', 'type', 'hash', 'command', 'builtin', 'enable',
-    // System limits
     'ulimit', 'umask',
-    // Misc
     'true', 'false', 'test', 'read', 'readarray', 'mapfile',
     'history', 'fc', 'help', 'logout', 'compgen', 'complete',
 ]);
 
-// Commands that wrap another command — unwrap to also offer the inner executable.
 const PRIVILEGE_ESCALATORS = new Set(['sudo', 'doas', 'su', 'run', 'env', 'nice', 'ionice', 'nohup', 'xargs']);
 
-// Check if an executable name is findable on the system PATH (or is a known shell built-in).
 function isInPath(exe: string): boolean {
     if (!exe) return false;
-    // Relative-path scripts (./gradlew, ./artisan, ../tools/build.sh) — always offer them.
     if (exe.startsWith('./') || exe.startsWith('../')) return true;
-    // Absolute paths are not offered as "any X" scope options.
     if (exe.includes('/') || exe.includes('\\')) return false;
     if (SHELL_BUILTINS.has(exe.toLowerCase())) return true;
-    // Strip common Windows extensions before PATH lookup (node.exe → node).
     const normalized = exe.replace(/\.(exe|cmd|bat|ps1)$/i, '');
     try {
         const cmd = process.platform === 'win32' ? `where "${normalized}"` : `which "${normalized}"`;
@@ -102,26 +74,30 @@ function isInPath(exe: string): boolean {
 function addScopeOption(options: ScopeOption[], seen: Set<string>, exe: string): void {
     if (!exe || seen.has(exe) || !isInPath(exe)) return;
     seen.add(exe);
-    options.push({ prefix: exe, label: `$(terminal-bash) ${exe}`, detail: `Any ${exe} command`, inPath: true });
+    options.push({
+        prefix: exe,
+        label: `$(terminal-bash) ${exe}`,
+        detail: isScriptableExe(exe)
+            ? `Any ${exe} command — ⚠ grants arbitrary code execution via ${exe}`
+            : `Any ${exe} command`,
+        inPath: true,
+        dangerous: isScriptableExe(exe),
+    });
 }
 
-// Build the list of scope options: exact full command + deduplicated executables.
-// Handles shell built-ins, relative-path scripts, privilege escalators, and .exe extensions.
 function buildScopeOptions(command: string): ScopeOption[] {
     const options: ScopeOption[] = [];
     const seen = new Set<string>();
 
     const display = command.length > 55 ? command.slice(0, 52) + '…' : command;
-    options.push({ prefix: command, label: `$(terminal) ${display}`, detail: 'Exact command only', inPath: true });
+    options.push({ prefix: command, label: `$(terminal) ${display}`, detail: 'Exact command only', inPath: true, dangerous: false });
 
-    for (const seg of parseSegments(command)) {
+    for (const seg of splitSegments(command)) {
         const exe = extractExecutable(seg);
         if (!exe) continue;
 
-        // For privilege escalators (sudo, env, nohup…) also offer the wrapped command.
         if (PRIVILEGE_ESCALATORS.has(exe.toLowerCase())) {
             addScopeOption(options, seen, exe);
-            // Find the first non-flag, non-env-var token after the escalator.
             const tokens = seg.split(/\s+/).slice(1);
             for (const tok of tokens) {
                 if (!tok.startsWith('-') && !tok.includes('=')) {
@@ -137,9 +113,14 @@ function buildScopeOptions(command: string): ScopeOption[] {
     return options;
 }
 
-async function startApprovalServer(context: vscode.ExtensionContext, provider: import('./sidebar').DeepSeekSidebarProvider): Promise<void> {
+async function startApprovalServer(context: vscode.ExtensionContext, provider: DeepSeekSidebarProvider): Promise<void> {
     const server = http.createServer(async (req, res) => {
-        // Task running/stopped notification from server.ts → forward to sidebar.
+        // Authenticate every request with the per-session token.
+        if (req.method === 'POST' && (req.headers['x-bridge-token'] ?? '') !== SESSION_TOKEN) {
+            res.writeHead(403).end();
+            return;
+        }
+
         if (req.method === 'POST' && req.url === '/running') {
             let body = '';
             req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
@@ -176,15 +157,13 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         let command = '';
         try { command = (JSON.parse(body) as { command: string }).command; } catch {}
 
-        // Session cache hit — no popup needed.
         if (isSessionApproved(command)) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'allow', approvedPrefixes: [command] }));
             return;
         }
 
-        // Reveal the sidebar and show the approval card.
-        const scopes = buildScopeOptions(command).map(o => ({ prefix: o.prefix, detail: o.detail, inPath: o.inPath }));
+        const scopes = buildScopeOptions(command).map(o => ({ prefix: o.prefix, detail: o.detail, inPath: o.inPath, dangerous: o.dangerous }));
         await vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
         provider.setBadge(1);
 
@@ -202,22 +181,18 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
         const allPrefixes = approvals.map(a => a.scope);
 
         for (const { scope: chosenPrefix, duration: action } of approvals) {
-            if (action === 'session' || action === 'always') {
-                sessionApproved.add(chosenPrefix);
-            }
+            if (action === 'session' || action === 'always') sessionApproved.add(chosenPrefix);
         }
 
         const alwaysPrefixes = approvals.filter(a => a.duration === 'always').map(a => a.scope);
         if (alwaysPrefixes.length) {
-            const existing = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
+            const settings = readSettings();
+            const existing = settings.allowCommands;
             const toAdd    = alwaysPrefixes.filter(p => !existing.includes(p));
             if (toAdd.length) {
                 const updated = [...existing, ...toAdd].sort((a, b) => a.localeCompare(b));
-                await context.globalState.update('deepseek-allow-commands', updated);
-                const apiKey  = await context.secrets.get('deepseek-api-key');
-                const model   = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
-                const posture = context.globalState.get<string>('deepseek-posture') ?? 'edit';
-                if (apiKey) writeMcpConfig(context, apiKey, model, posture, updated);
+                await updateSetting('allowCommands', updated);
+                // onDidChangeConfiguration will rewrite the runtime files; push to UI now.
                 provider.pushAllowCommands(updated);
             }
         }
@@ -229,10 +204,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
     await new Promise<void>((resolve, reject) => {
         server.listen(0, '127.0.0.1', () => {
             const { port } = server.address() as { port: number };
-            try {
-                fs.mkdirSync(path.dirname(APPROVAL_PORT_FILE), { recursive: true });
-                fs.writeFileSync(APPROVAL_PORT_FILE, String(port), 'utf8');
-            } catch { /* non-fatal — allowlist still works without the popup server */ }
+            writePortFile(workspaceKey(currentWorkspacePath()), port, SESSION_TOKEN);
             resolve();
         });
         server.on('error', reject);
@@ -241,12 +213,27 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: i
     context.subscriptions.push({
         dispose: () => {
             server.close();
-            try { fs.unlinkSync(APPROVAL_PORT_FILE); } catch {}
+            removePortFile(workspaceKey(currentWorkspacePath()));
         }
     });
 }
 
+// Push the full configuration to Claude Code + runtime files + CLAUDE.md guidance.
+// Guidance is only written once a key is configured — otherwise it would reference
+// tools Claude can't see yet.
+function applyConfig(context: vscode.ExtensionContext, apiKey: string | undefined): string {
+    const settings = readSettings();
+    let error = '';
+    if (apiKey) {
+        try { writeMcpConfig(context, apiKey, settings); } catch (e) { error = (e as Error).message; }
+        try { injectGuidance(currentWorkspacePath(), settings, getInjectTarget()); } catch { /* non-fatal */ }
+    }
+    return error;
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    await migrateLegacySettings(context);
+
     const provider = new DeepSeekSidebarProvider(context);
 
     context.subscriptions.push(
@@ -257,26 +244,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     await startApprovalServer(context, provider);
 
-    let apiKey         = await context.secrets.get('deepseek-api-key');
-    // Self-heal: if SecretStorage is empty (e.g. after a publisher/ID change,
-    // which resets per-extension secrets) but a key exists in ~/.claude.json
-    // from a previous install, migrate it back so the path refresh below runs.
+    let apiKey = await context.secrets.get('deepseek-api-key');
     if (!apiKey) {
         const recovered = readExistingMcpKey();
         if (recovered) {
-            // Best-effort cache; may have no keyring backend on headless remotes.
             try { await context.secrets.store('deepseek-api-key', recovered); } catch { /* ignore */ }
             apiKey = recovered;
         }
     }
-    const model        = context.globalState.get<string>('deepseek-model') ?? 'deepseek-v4-flash';
-    const posture      = context.globalState.get<string>('deepseek-posture') ?? 'edit';
-    const allowCommands = context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
-    // Always refresh the MCP config on activation so the server.js path tracks
-    // the currently-installed extension version (the path changes every update).
-    if (apiKey) {
-        writeMcpConfig(context, apiKey, model, posture, allowCommands);
+
+    // Always refresh config on activation so the (stable) server path + runtime
+    // settings + CLAUDE.md guidance track the installed version.
+    applyConfig(context, apiKey);
+
+    // Detect an extension update and proactively prompt to reconnect — Claude Code
+    // only reads MCP servers at spawn, so a silent update would otherwise leave a
+    // running session on the old server until the user happens to reconnect.
+    const version  = (context.extension?.packageJSON as { version?: string })?.version ?? 'dev';
+    const prevVer  = context.globalState.get<string>('deepseek-last-version');
+    if (apiKey && prevVer && prevVer !== version) {
+        void vscode.window.showInformationMessage(
+            `DeepSeek Bridge updated to v${version}. Reconnect Claude Code to load the new server.`,
+            'Reconnect'
+        ).then(choice => { if (choice === 'Reconnect') vscode.commands.executeCommand('deepseek-bridge.reconnect'); });
     }
+    await context.globalState.update('deepseek-last-version', version);
 
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
     statusBar.command = 'deepseek-bridge.openSidebar';
@@ -284,9 +276,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(statusBar);
 
     const updateStatusBar = (): void => {
-        const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+        // Authoritative on ~/.claude.json so keyless remotes never show a false "not configured".
+        const key = readExistingMcpKey();
+        const settings = readSettings();
+        const wsPath = currentWorkspacePath();
         const enabledHere = wsPath ? isWorkspaceEnabled(wsPath) : true;
-        if (!apiKey) {
+        if (!key) {
             statusBar.text = '$(zap) DeepSeek $(warning)';
             statusBar.tooltip = 'DeepSeek Bridge — API key not set\nClick to configure';
         } else if (!enabledHere) {
@@ -294,16 +289,83 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             statusBar.tooltip = 'DeepSeek is OFF for this workspace\nClick to open settings';
         } else {
             statusBar.text = '$(zap) DeepSeek';
-            statusBar.tooltip = `DeepSeek active — ${model} (${posture})\nClick to open settings`;
+            statusBar.tooltip = `DeepSeek active — ${settings.model} (${settings.posture})\nClick to open settings`;
         }
     };
     updateStatusBar();
+
+    // React to native Settings UI / settings.json changes — rewrite runtime files.
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(async e => {
+            if (e.affectsConfiguration('deepseekBridge')) {
+                const key = await context.secrets.get('deepseek-api-key') ?? readExistingMcpKey();
+                applyConfig(context, key);
+                provider.pushConfig();
+                updateStatusBar();
+            }
+        })
+    );
 
     context.subscriptions.push(
         vscode.commands.registerCommand('deepseek-bridge.openSidebar', () => {
             vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
         }),
-        vscode.commands.registerCommand('deepseek-bridge.refreshStatus', updateStatusBar)
+        vscode.commands.registerCommand('deepseek-bridge.refreshStatus', updateStatusBar),
+        vscode.commands.registerCommand('deepseek-bridge.setApiKey', async () => {
+            await vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
+            provider.focusApiKey();
+        }),
+        vscode.commands.registerCommand('deepseek-bridge.openHistory', async () => {
+            await vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
+            provider.showHistory();
+        }),
+        vscode.commands.registerCommand('deepseek-bridge.stopTask', () => {
+            try {
+                fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+                fs.writeFileSync(killFilePath(workspaceKey(currentWorkspacePath())), '1', 'utf8');
+                vscode.window.setStatusBarMessage('DeepSeek: stop signal sent.', 3000);
+            } catch { /* non-fatal */ }
+        }),
+        vscode.commands.registerCommand('deepseek-bridge.toggleWorkspace', () => {
+            const wsPath = currentWorkspacePath();
+            if (!wsPath) { void vscode.window.showWarningMessage('DeepSeek Bridge: no folder open.'); return; }
+            const next = !isWorkspaceEnabled(wsPath);
+            setWorkspaceEnabled(wsPath, next);
+            updateStatusBar();
+            provider.pushConfig();
+            vscode.window.setStatusBarMessage(`DeepSeek ${next ? 'enabled' : 'disabled'} for this workspace.`, 3000);
+        }),
+        vscode.commands.registerCommand('deepseek-bridge.reconnect', async () => {
+            const choice = await vscode.window.showInformationMessage(
+                'Reconnect Claude Code so it loads DeepSeek Bridge changes. Run /mcp in Claude Code, or reload this window.',
+                'Reload Window'
+            );
+            if (choice === 'Reload Window') vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }),
+        vscode.commands.registerCommand('deepseek-bridge.copyDiagnostics', async () => {
+            const settings = readSettings();
+            const wsPath = currentWorkspacePath();
+            let auditTail = '';
+            try {
+                const log = path.join(AUDIT_DIR, `${workspaceKey(wsPath)}.log`);
+                const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
+                auditTail = lines.slice(-20).join('\n');
+            } catch { auditTail = '(no audit log)'; }
+            const diag = [
+                `DeepSeek Bridge diagnostics`,
+                `version: ${(context.extension?.packageJSON as { version?: string })?.version ?? 'dev'}`,
+                `model: ${settings.model}  posture: ${settings.posture}  modelAuto: ${settings.modelAuto}`,
+                `aggressiveness: ${settings.aggressiveness}  baseUrl: ${settings.baseUrl}`,
+                `fullPermissions: ${settings.fullPermissions}  allowCommands: ${settings.allowCommands.length}`,
+                `workspace configured: ${!!readExistingMcpKey()}  enabled here: ${wsPath ? isWorkspaceEnabled(wsPath) : 'n/a'}`,
+                `remote: ${vscode.env.remoteName ?? 'local'}`,
+                ``,
+                `recent audit (last 20):`,
+                auditTail,
+            ].join('\n');
+            await vscode.env.clipboard.writeText(diag);
+            void vscode.window.showInformationMessage('DeepSeek Bridge diagnostics copied to clipboard.');
+        }),
     );
 }
 

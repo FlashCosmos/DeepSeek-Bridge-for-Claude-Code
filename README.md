@@ -1,14 +1,28 @@
 # ⚡ DeepSeek Bridge for Claude Code
 
-**Offload token-heavy work from Claude to DeepSeek — 10–100× cheaper, sandboxed, and fully under your control.**
+**Offload token-heavy work from Claude to DeepSeek — automatically, sandboxed, and fully under your control.**
 
-DeepSeek Bridge connects [Claude Code](https://claude.com/claude-code) to [DeepSeek](https://platform.deepseek.com) via the Model Context Protocol (MCP). When Claude encounters a heavy chore — refactoring, code generation, multi-file edits, large-file analysis — it can delegate that work to DeepSeek at a fraction of the cost. Claude stays in charge: it plans the work, hands it off to DeepSeek, and reviews the results.
+[![Version](https://img.shields.io/visual-studio-marketplace/v/FlashCosmos.claude-deepseek-bridge?label=marketplace)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/FlashCosmos.claude-deepseek-bridge)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/FlashCosmos.claude-deepseek-bridge)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+DeepSeek Bridge connects [Claude Code](https://claude.com/claude-code) to [DeepSeek](https://platform.deepseek.com) via the Model Context Protocol (MCP). When Claude hits a heavy chore — a multi-file refactor, code generation, mechanical edits, large-file analysis — it hands that work to DeepSeek at a fraction of the cost. Claude stays in charge: it plans, delegates, and reviews the result.
+
+The difference from a plain MCP server: **Bridge installs a delegation policy into your `CLAUDE.md`, so Claude offloads the right work on its own — you don't have to say "use DeepSeek."**
 
 ---
 
 ## How it works
 
-Claude Code calls one of two MCP tools provided by this extension. The request is handled by a sandboxed DeepSeek agent that can read, write, and list files inside your workspace — nothing outside it. The agent runs until the task is done: when the context window fills up, it automatically summarises its own progress and keeps going without stopping or asking you to resume. If the agent needs to run a shell command (e.g. to run tests), it pauses and asks for your approval before proceeding.
+![Architecture](media/architecture.png)
+
+1. On **Save & Connect**, Bridge writes a managed delegation-policy block to your `CLAUDE.md` and registers two MCP tools with Claude Code.
+2. When a task is token-heavy and file-based, Claude calls `run_deepseek_task`. A sandboxed DeepSeek agent reads, writes, and lists files **inside your workspace only**.
+3. The agent runs to completion — when its context fills up it summarises its own progress and keeps going (no manual resume). If it wants to run a shell command (e.g. tests), it asks you first.
+4. Claude gets back a structured manifest — **a unified diff per modified file and the exit code of any command run** — so it can verify the work *without re-reading whole files*.
+
+> **Data handling:** to do its work, your file contents and prompts are sent to DeepSeek's API (`api.deepseek.com`). See [Privacy & data handling](#privacy--data-handling) below.
 
 ---
 
@@ -16,159 +30,56 @@ Claude Code calls one of two MCP tools provided by this extension. The request i
 
 ### Requirements
 - [Claude Code](https://claude.com/claude-code) installed and running
-- A [DeepSeek API key](https://platform.deepseek.com/api_keys) — free to create at platform.deepseek.com
+- A [DeepSeek API key](https://platform.deepseek.com/api_keys) — free at platform.deepseek.com
 
 ### Steps
+1. **Install** from the VS Code Marketplace — search **DeepSeek Bridge for Claude Code**.
+2. **Open the sidebar** — click the ⚡ icon in the Activity Bar. (A Getting Started walkthrough also appears on first install.)
+3. **Enter your DeepSeek API key.** You'll be asked to acknowledge that your code is sent to DeepSeek before anything is transmitted.
+4. **Pick a model, a delegation aggressiveness, and a permission posture** — then click **Save & Connect**.
+5. **Reconnect Claude Code** — run **DeepSeek Bridge: Reconnect Claude Code**, run `/mcp`, or reload the window.
 
-1. **Install the extension** from the VS Code Marketplace — search for **DeepSeek Bridge for Claude Code**, or install directly from this page.
+That's it. Ask Claude to do something big — *"refactor everything in `src/` to use the new API"* — and it delegates the grind automatically.
 
-2. **Open the sidebar** — click the ⚡ icon in the Activity Bar.
-
-3. **Enter your DeepSeek API key** — stored in VS Code's encrypted SecretStorage, never in plain text.
-
-4. **Configure your settings:**
-
-   | Setting | Options |
-   |---------|---------|
-   | Model | **V4 Flash** — fast and cheap (recommended) · **V4 Pro** — advanced reasoning |
-   | Automatic Model Switching | **No** · **Ask** · **Yes** — see below |
-   | Permissions | **Edit** — read and write files · **Read-only** — analysis only |
-
-5. **Click Save & Connect** — the extension writes your configuration to Claude Code automatically.
-
-6. **Restart Claude Code** (or run `/mcp`) to load the new server.
-
-That's it. Claude will now delegate file-heavy tasks to DeepSeek automatically. Just ask Claude to do something big — *"refactor everything in `src/` to use the new API"* — and it handles the rest.
+> Model, posture, aggressiveness, and allow-list changes apply **immediately** — only an API-key change needs a reconnect.
 
 ---
 
 ## Features
 
-### Two tools for different jobs
+### Automatic delegation (the seamless part)
+Bridge writes a managed, fenced block into your `CLAUDE.md` telling Claude *when* to offload — tunable via **Delegation Aggressiveness** (Conservative / Balanced / Aggressive). The same policy backs the MCP server's `instructions` and the tool descriptions, so Claude reliably routes heavy work to DeepSeek without being told. The block is delimited with markers and never touches your own content; set `deepseekBridge.injectGuidance` to `off` to disable.
+
+### Two tools
 
 | Tool | What it does |
 |------|-------------|
-| `ask_deepseek` | Single Q&A call — no file access, no agent loop. Great for explanations, code snippets, or any reasoning you want to offload cheaply. |
-| `run_deepseek_task` | Autonomous file agent — reads, writes, and lists files inside your workspace to complete a multi-step task. Returns a structured manifest of every file it touched, plus a prose summary. |
+| `ask_deepseek` | Single Q&A — no file access. For self-contained, token-heavy reasoning or snippets. Honors automatic model switching. |
+| `run_deepseek_task` | Autonomous file agent — reads/writes/lists files and (with approval) runs shell commands. Returns a manifest with **diffs + command exit codes**. |
 
----
+### Review without re-reading
+Every applied edit comes back as a **unified diff**; `dryRun` returns diffs for existing files and full content for new ones; any self-verification command's **exit code** is reported. Claude can trust the result without spending tokens re-reading the files — so the offload is a real net win. Optional `selfReview` runs one extra completeness pass for enumeration/indexing tasks.
 
-### Context condensation — tasks run to completion
-
-When the agent's context window fills up mid-task (around 65% of the model's limit), it doesn't stop. Instead, it automatically:
-
-1. Writes a compact summary of what it has done and what remains
-2. Replaces the conversation history with that summary
-3. Continues from where it left off
-
-This means a task that reads 30 files and rewrites a 40 KB document will complete in a single call — no manual resume steps, no orchestrator decomposition required. This is the same approach used by Roo Code.
-
----
-
-### Automatic model switching
-
-Control whether DeepSeek can switch between Flash and Pro based on task complexity:
-
-| Mode | Behaviour |
-|------|-----------|
-| **No** *(default)* | Always use the model selected in the sidebar. The `model` parameter in tool calls is ignored. |
-| **Ask** | When Claude requests a model switch, an approval popup appears — the same popup used for shell commands — showing the cost implication. You decide each time. |
-| **Yes** | Claude picks Flash or Pro freely. It uses Flash for routine work and Pro for tasks where accuracy matters more than cost. |
-
-The model used for each call is shown in every response header: `[DeepSeek Bridge v1.1.23 | model: deepseek-v4-flash]`
-
----
+### Context condensation
+Around 65% of the model's 1M-token window the agent summarises its progress, compacts its history, and continues — so big tasks finish in one call. A `resumeId` only appears on the rare runaway/error exit.
 
 ### Per-call permission scoping
+`posture` (`read` / `create-only` / `edit`, clamped to the server max), `writePaths` glob allow-list, and `dryRun` let Claude scope each delegation tightly.
 
-Claude can scope each task tightly, independent of the server default:
+### Command approval, done right
+When DeepSeek wants to run a command, an inline card lets you approve the exact command or any command from that executable, for Once / this Session / Always. Broad approvals of scriptable tools (`git`, `node`, `npm`, …) are flagged as arbitrary-code-execution. Chained commands (`&&`, `||`, `;`) are split and every segment must match.
 
-| Parameter | Description |
-|-----------|-------------|
-| `posture` | `read`, `create-only`, or `edit` — clamped to the server maximum set in the sidebar |
-| `writePaths` | Glob allowlist restricting which paths may be written, e.g. `["tests/**", "docs/*.md"]` |
-| `dryRun` | Return proposed file writes as diffs without applying them |
+### Native Settings + everything live
+All settings are exposed under `deepseekBridge.*` in the VS Code Settings UI — discoverable, searchable, syncable via Settings Sync, and overridable per-workspace. The sidebar is a friendly editor over the same settings.
 
-Example: Claude can run a refactor task with `posture: "edit"` and `writePaths: ["src/utils/**"]` — DeepSeek physically cannot write outside `src/utils/` no matter what the prompt says.
+### Built for scale
+Per-window signal files (Stop in one window can't kill another's task), per-session auth token on the local approval channel, a single-in-flight task guard, atomic cost-history writes, resume-file garbage collection, MCP progress heartbeats on long tasks, and a version-independent server path so an extension auto-update never silently strands the bridge.
 
----
+### Live Console & Cost History
+The Console tab streams tool calls, token usage, and condensation events. The History tab shows per-task cost and a Claude comparison; cache-hit ratio is shown when DeepSeek reports it.
 
-### Structured result manifest
-
-Every `run_deepseek_task` call returns a structured manifest alongside the prose summary:
-
-```json
-{
-  "created":  ["docs/affiliate.md"],
-  "modified": ["docs/INDEX.md"],
-  "skipped":  ["src/readonly-file.ts"]
-}
-```
-
-Each path appears exactly once, even when the agent writes a file in multiple passes (chunked writes). Claude can verify programmatically without re-reading every file.
-
----
-
-### Line-numbered file reads
-
-Every file is delivered to the DeepSeek agent with 1-based line numbers (`N\tcontent`), the same format as `cat -n`. This lets the agent anchor method and symbol references to exact lines, reducing the drift in cross-references that occurs when working with large service files.
-
----
-
-### Resume handle
-
-If a task somehow reaches the hard 500-iteration runaway guard (rare with context condensation active), it saves its full conversation state and returns a `resumeId`. Call `run_deepseek_task` again with that ID to continue exactly where it stopped — same context, same partial manifest, no re-reading files.
-
-Under normal operation you will never see a `resumeId`. Context condensation completes the task transparently.
-
----
-
-### Command approval popup
-
-When DeepSeek wants to run a shell command, the sidebar shows an approval card before anything executes. You choose:
-
-- **What to approve** — the exact command, or any command from that executable (e.g. approve all `npm` commands)
-- **How long** — Once, for this Session, or Always (saved permanently)
-
-Only executables found on your system PATH are offered as scope options — PowerShell sub-commands, script arguments, and keywords are filtered out automatically. Chained commands (`&&`, `||`, `;`) are split and every segment must match the allowlist independently.
-
----
-
-### Auto-approved commands
-
-Commands you've approved with **Always** are listed in the sidebar. Add, remove, or edit them at any time. Changes take effect immediately — no restart needed.
-
----
-
-### Full Permissions toggle
-
-> ⚠️ **Caution: bypasses all command approval prompts.**
-
-When enabled, every command runs without asking. Only use this in trusted environments where you don't need per-command control.
-
----
-
-### Stop button
-
-A **Stop** button appears in the sidebar whenever a task is running. Clicking it cancels the task immediately — including aborting any in-flight API call — and returns a clean message to Claude.
-
----
-
-### Live Console tab
-
-The sidebar's **Console** tab streams live output as a task runs: which files are being read, what commands are being called, token usage per iteration, context condensation events, and a cost summary when the task finishes.
-
----
-
-### Cost History tab
-
-Every task is logged with its token count, cost, and a comparison of what the same work would have cost using Claude. Lifetime totals and savings are shown at the bottom.
-
----
-
-### Workspace toggle
-
-Enable or disable DeepSeek per-workspace from the top of the sidebar. Takes effect immediately with no restart.
+### Command palette
+`Open Settings`, `Set API Key`, `Open Cost History`, `Stop Running Task`, `Enable / Disable for This Workspace`, `Reconnect Claude Code`, and `Copy Diagnostics`.
 
 ---
 
@@ -176,53 +87,67 @@ Enable or disable DeepSeek per-workspace from the top of the sidebar. Takes effe
 
 DeepSeek runs in a strict sandbox:
 
-- **Workspace jail** — every file path is canonicalized and confirmed to be inside your workspace. UNC paths, drive-letter escapes, symlink traversal, alternate data streams, and `..` tricks are all rejected before any file is touched.
-- **Sensitive file denylist** — credentials, private keys, shell history, and config files are blocked even inside the workspace: `.env`, `.ssh/`, `.aws/`, `.npmrc`, `.git-credentials`, `auth.json`, `id_rsa`, `.pem`, `.key`, `storage/logs/`, `*.sqlite`, `.claude/`, and more.
-- **No network access** — the agent has no network tools. It can only read/write files and run approved shell commands.
-- **Per-call write allowlist** — Claude can restrict writes to specific glob patterns per task; anything outside is refused at the filesystem level regardless of what the prompt says.
-- **Shell operator splitting** — chained commands (`&&`, `||`, `;`) are split and every segment must be individually approved. Approving `node` cannot be used to sneak through `node good && rm -rf /`.
-- **Audit log** — every tool call is timestamped and logged to `.deepseek-audit.log` in your workspace root.
-- **Runaway guard** — a 500-iteration hard cap exists only to catch genuine infinite loops. Normal tasks complete via context condensation long before reaching it.
+- **Workspace jail** — every path is canonicalized and confirmed inside your workspace. UNC paths, drive-letter escapes, symlink traversal, alternate data streams, and `..` tricks are rejected.
+- **Sensitive-file denylist (non-exhaustive)** — blocks common secret files even inside the workspace: `.env`, `.ssh/`, `.aws/`, `.kube/`, `kubeconfig`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`, `auth.json`, `*.pem`/`*.key`, `*.tfstate`/`*.tfvars`, `wp-config.php`, `*.sqlite`, `.git/`, and more. A path denylist can't catch everything — review what's in your workspace before delegating.
+- **The agent has no network tools of its own** — it can only read/write files and run approved commands. (Your code is still sent to DeepSeek's API to perform the task — see below.)
+- **`run_command` is real execution** — approving a scriptable tool (`git`, `node`, …) grants arbitrary code via that tool, which can read files the denylist protects. The approval card warns you; prefer "Exact command only".
+- **Authenticated local channel** — the approval/event server is bound to `127.0.0.1` and requires a per-session token.
+- **Audit log** — every tool call is logged (with full args) to `~/.claude/deepseek-audit/<workspace>.log`, outside your repo so it can't be committed.
+
+---
+
+## Privacy & data handling
+
+DeepSeek Bridge is an LLM bridge: **to perform a task, your workspace file contents, prompts, and command output are transmitted to DeepSeek's API** (`api.deepseek.com`, operated by DeepSeek, Hangzhou, PRC). The phrase "no network" elsewhere refers only to the agent's tool set, not to this transmission.
+
+- You're asked to **explicitly consent** the first time you save an API key. Nothing is sent before that.
+- The API key is stored in VS Code SecretStorage and mirrored to `~/.claude.json` (the file Claude Code reads).
+- Don't use Bridge on code you cannot share with a third-party service. Review DeepSeek's [privacy policy](https://platform.deepseek.com/downloads/DeepSeek%20Privacy%20Policy.html) and your organisation's data-egress rules.
+- Point `deepseekBridge.baseUrl` at a regional mirror, self-hosted DeepSeek, or a corporate LLM proxy if required.
 
 ---
 
 ## Pricing
 
-DeepSeek caches prompt prefixes automatically — no configuration, no cache-write fee. Because the agent loop keeps the system prompt and task description identical across iterations, most of the input on a multi-step task bills at the much cheaper **cache-hit** rate. The Cost History tab shows the cache-hit ratio per task.
+DeepSeek caches prompt prefixes automatically (no config, no cache-write fee); cache hits bill at a small fraction of the miss rate, which the append-only agent loop maximises.
 
 | Model | Input (cache hit) | Input (cache miss) | Output |
 |-------|-------------------|--------------------|--------|
 | DeepSeek V4 Flash | $0.0028 / 1M | $0.14 / 1M | $0.28 / 1M |
-| DeepSeek V4 Pro | $0.0145 / 1M | $1.74 / 1M | $3.48 / 1M |
+| DeepSeek V4 Pro | $0.003625 / 1M | $0.435 / 1M | $0.87 / 1M |
 
-> **Note:** These figures are estimates based on our current knowledge of DeepSeek V4 pricing and may change. Always verify against the official [DeepSeek pricing page](https://api-docs.deepseek.com/quick_start/pricing). The extension's cost calculations use these same estimates.
+> Estimates as of 2026-06-27 — verify against the official [DeepSeek pricing page](https://api-docs.deepseek.com/quick_start/pricing). The Cost History tab stamps the pricing date.
 
-**Example:** A multi-step task using ~100K input (mostly cache hits) + 50K output on V4 Flash costs roughly **$0.02**, versus around **$1.05** with a frontier Claude model — about 98% cheaper.
+The History tab compares against Claude (Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, Opus 4.8 $5/$25 per 1M). The displayed savings are a **gross** token-cost delta and exclude Claude's own review overhead, so real net savings are somewhat lower.
 
 ---
 
 ## Configuration reference
 
+All settings live under `deepseekBridge.*` (Settings UI) and in the sidebar:
+
 | Setting | Description |
 |---------|-------------|
-| API Key | Your DeepSeek API key (encrypted, stored in VS Code SecretStorage) |
-| Model | V4 Flash (recommended) or V4 Pro — the default model for all tasks |
-| Automatic Model Switching | No / Ask / Yes — controls whether Claude can request a model switch per task |
-| Permissions | Maximum file access level: Read-only or Edit |
-| Allowed Commands | Shell commands pre-approved without a popup |
-| Full Permissions | Bypass all command approval prompts (caution) |
-| Workspace Enabled | Enable or disable DeepSeek for the current workspace |
+| `model` | `deepseek-v4-flash` (recommended) or `deepseek-v4-pro` |
+| `modelAuto` | `no` / `ask` / `yes` — may Claude switch models per task |
+| `posture` | `edit` or `read-only` — max file access |
+| `delegationAggressiveness` | `conservative` / `balanced` / `aggressive` — how eagerly Claude offloads |
+| `injectGuidance` | `workspace` / `user` / `off` — where the delegation block is written |
+| `allowCommands` | Shell prefixes pre-approved without a popup |
+| `fullPermissions` | ⚠️ Auto-approve all commands (trusted environments only) |
+| `baseUrl` | OpenAI-compatible endpoint (mirror / self-host / proxy) |
 
-### Advanced per-call parameters (used by Claude, not set in the sidebar)
+### Per-call parameters (used by Claude)
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `posture` | `read` \| `create-only` \| `edit` | Override the permission level for this task (clamped to server max) |
-| `writePaths` | `string[]` | Glob allowlist of writable paths for this task |
-| `dryRun` | `boolean` | Return proposed writes without applying them |
-| `model` | `flash` \| `pro` | Request a specific model (subject to Automatic Model Switching setting) |
-| `maxIterations` | `number` | Hard cap on iterations (default: 500; lower to stop early deliberately) |
-| `resumeId` | `string` | Resume a paused task from exactly where it stopped |
+| `posture` | `read` \| `create-only` \| `edit` | Permission level (clamped to server max) |
+| `writePaths` | `string[]` | Glob allow-list of writable paths |
+| `dryRun` | `boolean` | Return proposed diffs without applying |
+| `selfReview` | `boolean` | Extra completeness pass before finishing |
+| `model` | `flash` \| `pro` | Request a model (subject to `modelAuto`) |
+| `maxIterations` | `number` | Iteration cap (default/max 500) |
+| `resumeId` | `string` | Resume a paused task |
 
 ---
 

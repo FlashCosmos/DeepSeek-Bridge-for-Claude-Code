@@ -2,7 +2,7 @@
   "name": "claude-deepseek-bridge",
   "displayName": "DeepSeek Bridge for Claude Code",
   "description": "Let Claude Code offload token-heavy, file-based chores to DeepSeek — sandboxed, cheaper, you stay in control.",
-  "version": "1.1.25",
+  "version": "1.2.0",
   "publisher": "FlashCosmos",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -46,7 +46,7 @@
       "activitybar": [
         {
           "id": "deepseek-bridge-container",
-          "title": "DeepSeek Bridge",
+          "title": "%deepseek-bridge.container.title%",
           "icon": "media/deepseek.svg"
         }
       ]
@@ -56,14 +56,199 @@
         {
           "type": "webview",
           "id": "deepseek-bridge.config",
-          "name": "Configuration"
+          "name": "%deepseek-bridge.view.name%"
         }
       ]
     },
     "commands": [
       {
         "command": "deepseek-bridge.openSidebar",
-        "title": "DeepSeek Bridge: Open Settings"
+        "title": "%deepseek-bridge.cmd.openSidebar%",
+        "category": "%deepseek-bridge.category%"
+      },
+      {
+        "command": "deepseek-bridge.setApiKey",
+        "title": "%deepseek-bridge.cmd.setApiKey%",
+        "category": "%deepseek-bridge.category%"
+      },
+      {
+        "command": "deepseek-bridge.openHistory",
+        "title": "%deepseek-bridge.cmd.openHistory%",
+        "category": "%deepseek-bridge.category%"
+      },
+      {
+        "command": "deepseek-bridge.stopTask",
+        "title": "%deepseek-bridge.cmd.stopTask%",
+        "category": "%deepseek-bridge.category%"
+      },
+      {
+        "command": "deepseek-bridge.toggleWorkspace",
+        "title": "%deepseek-bridge.cmd.toggleWorkspace%",
+        "category": "%deepseek-bridge.category%"
+      },
+      {
+        "command": "deepseek-bridge.reconnect",
+        "title": "%deepseek-bridge.cmd.reconnect%",
+        "category": "%deepseek-bridge.category%"
+      },
+      {
+        "command": "deepseek-bridge.copyDiagnostics",
+        "title": "%deepseek-bridge.cmd.copyDiagnostics%",
+        "category": "%deepseek-bridge.category%"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "deepseek-bridge.refreshStatus",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DeepSeek Bridge",
+      "properties": {
+        "deepseekBridge.model": {
+          "type": "string",
+          "enum": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro"
+          ],
+          "enumDescriptions": [
+            "V4 Flash — fast & cheap (recommended)",
+            "V4 Pro — advanced reasoning, higher cost"
+          ],
+          "default": "deepseek-v4-flash",
+          "description": "Default DeepSeek model used for delegated work.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.modelAuto": {
+          "type": "string",
+          "enum": [
+            "no",
+            "ask",
+            "yes"
+          ],
+          "enumDescriptions": [
+            "Always use the selected model",
+            "Prompt me before Claude switches model",
+            "Let Claude choose Flash vs Pro per task"
+          ],
+          "default": "no",
+          "description": "Whether Claude may switch between Flash and Pro per task.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.posture": {
+          "type": "string",
+          "enum": [
+            "edit",
+            "read-only"
+          ],
+          "enumDescriptions": [
+            "Edit — DeepSeek may read and write files",
+            "Read-only — DeepSeek may only read files"
+          ],
+          "default": "edit",
+          "description": "Maximum file-access level granted to DeepSeek (per-call requests are clamped to this).",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.delegationAggressiveness": {
+          "type": "string",
+          "enum": [
+            "conservative",
+            "balanced",
+            "aggressive"
+          ],
+          "enumDescriptions": [
+            "Delegate only large, clearly token-heavy chores",
+            "Delegate multi-file or large-file work (recommended)",
+            "Delegate aggressively — keep Claude's context lean"
+          ],
+          "default": "balanced",
+          "description": "How eagerly Claude should offload work to DeepSeek. Tunes the guidance written to your CLAUDE.md and the MCP tool hints.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.injectGuidance": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "user",
+            "off"
+          ],
+          "enumDescriptions": [
+            "Write delegation guidance to this workspace's CLAUDE.md",
+            "Write delegation guidance to your global ~/.claude/CLAUDE.md",
+            "Do not write any delegation guidance"
+          ],
+          "default": "workspace",
+          "markdownDescription": "Where to write the managed delegation-policy block that tells Claude **when** to offload. This is what makes offloading automatic. The block is fenced with markers and never touches your own content.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.allowCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Shell command prefixes DeepSeek may run for self-verification without a popup (e.g. \"npm test\", \"git\").",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.fullPermissions": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "⚠️ Auto-approve **all** shell commands without prompting. Trusted environments only.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "OpenAI-compatible API endpoint. Point this at a regional mirror, self-hosted DeepSeek, or a corporate LLM proxy if needed.",
+          "scope": "machine-overridable"
+        }
+      }
+    },
+    "walkthroughs": [
+      {
+        "id": "deepseek-bridge.getStarted",
+        "title": "Get Started with DeepSeek Bridge",
+        "description": "Offload token-heavy work from Claude to DeepSeek in four steps.",
+        "steps": [
+          {
+            "id": "requirements",
+            "title": "Check requirements",
+            "description": "You need Claude Code installed and a DeepSeek API key (free at platform.deepseek.com).\n[Get a DeepSeek API key](https://platform.deepseek.com/api_keys)",
+            "media": {
+              "markdown": "walkthroughs/requirements.md"
+            }
+          },
+          {
+            "id": "apiKey",
+            "title": "Add your API key",
+            "description": "Open the DeepSeek Bridge sidebar and paste your API key.\n[Open Settings](command:deepseek-bridge.openSidebar)",
+            "media": {
+              "markdown": "walkthroughs/apikey.md"
+            },
+            "completionEvents": [
+              "onCommand:deepseek-bridge.setApiKey"
+            ]
+          },
+          {
+            "id": "configure",
+            "title": "Choose model & permissions",
+            "description": "Pick a model, set how eagerly Claude should delegate, and choose a permission posture.\n[Open Settings](command:deepseek-bridge.openSidebar)",
+            "media": {
+              "markdown": "walkthroughs/configure.md"
+            }
+          },
+          {
+            "id": "reconnect",
+            "title": "Reconnect & try it",
+            "description": "Reconnect Claude Code so it loads the bridge, then ask Claude to do something big.\n[Reconnect Claude Code](command:deepseek-bridge.reconnect)",
+            "media": {
+              "markdown": "walkthroughs/reconnect.md"
+            }
+          }
+        ]
       }
     ]
   },
@@ -72,8 +257,11 @@
     "bundle:server": "esbuild src/server.ts --bundle --outfile=out/server.js --platform=node --target=node20 --format=cjs --minify --conditions=require",
     "bundle": "npm run bundle:ext && npm run bundle:server",
     "watch": "npm run bundle:ext -- --watch & npm run bundle:server -- --watch",
-    "package": "npm run bundle && vsce package --no-dependencies",
-    "vscode:prepublish": "npm run bundle"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run typecheck && npm run bundle && vsce package --no-dependencies",
+    "vscode:prepublish": "npm run typecheck && npm run bundle"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -81,7 +269,8 @@
     "@types/vscode": "^1.100.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.28.1",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
