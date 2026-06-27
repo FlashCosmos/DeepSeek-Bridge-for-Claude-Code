@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1 — Channel resilience (hotfix)
+- **Fix: the live console and approval popups could go silently dark.** The v1.2.0 per-window port-file keying had no fallback, so if the server's `CLAUDE_PROJECT_DIR`-derived workspace key didn't normalize to the extension's workspace path (or an old pre-1.2 server was still running mid-upgrade), the local UI channel resolved to nothing and every console event + approval request was dropped without a trace — tasks looked hung.
+- Robust endpoint discovery (exact per-window key → most-recently-active window → lone port file); a global `_active.json` pointer + a legacy port file for old servers mid-upgrade.
+- The per-session token now gates only the approve action; the display-only console/status feed is open, so the UI is never silently dark from a key/token mismatch.
+- Unreachable-UI failures now return a distinct error ("NOT a user denial") instead of looking like a user decline, plus a one-time MCP-log warning.
+- **Copy Diagnostics** now reports the workspace key, registered server path, and approval-channel port files to make this class of issue debuggable.
+
 ## 1.2.0 — The "seamless & premium" overhaul
 
 ### Seamless delegation (the headline)
