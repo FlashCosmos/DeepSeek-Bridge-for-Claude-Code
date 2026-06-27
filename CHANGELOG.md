@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.24
+- **Correct context window: 1M tokens**. DeepSeek V4 Flash and Pro both ship a 1,048,576-token window by default (the V4 floor, not a premium tier). The extension was hardcoded to 64K/128K, causing context condensation to fire at ~5% of real capacity.
+- **Fix: condensation trigger now measures the *current* context**, not a cumulative sum of every iteration's prompt tokens. The old logic summed `prompt_tokens` across iterations — but each call re-sends the whole history, so the sum over-counted real context several-fold and triggered condensation far too early. Cumulative tokens are still tracked separately for accurate cost/billing.
+- Net effect: condensation is now a true last-resort safety net near ~681K tokens. Ordinary tasks run start-to-finish on a single uncondensed context, preserving full fidelity.
+- Console/`tokens` events now report live `contextTokens` vs `contextWindow`.
+
 ## 1.1.23
 - **Automatic model switching**: New sidebar setting — **No** (fixed), **Ask** (approval popup before switching), or **Yes** (Claude picks Flash vs Pro freely per task). The model used is shown in every response header.
 - `run_deepseek_task` now accepts a `model: "flash" | "pro"` parameter. In **Ask** mode this triggers the same approval popup used for shell commands, showing the cost implication. In **No** mode the parameter is silently ignored.
@@ -36,8 +42,6 @@
 - Self-heal MCP server path after publisher/version change.
 
 ## 1.1.8
-- **README**: Clarified that Node.js is not a user requirement — Claude Code already includes it.
-- **Icon**: Updated extension icon to new logo.
 - **README**: Clarified that Node.js is not a user requirement — Claude Code already includes it.
 - **Icon**: Updated extension icon to new logo.
 

@@ -12,7 +12,7 @@ import { isWorkspaceEnabled } from './control';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const EXTENSION_VERSION = '1.1.23';   // keep in sync with package.json
+const EXTENSION_VERSION = '1.1.24';   // keep in sync with package.json
 
 const API_KEY     = process.env['DEEPSEEK_API_KEY'];
 const MODEL       = process.env['DEEPSEEK_MODEL'] ?? 'deepseek-v4-flash';
@@ -36,15 +36,17 @@ async function resolveModel(requested: string | undefined): Promise<string> {
     return approved ? target : MODEL;
 }
 
-// Context window sizes per model. When the running input-token count crosses
+// Context window sizes per model. When the CURRENT context size crosses
 // CONDENSE_AT, the agent summarises its own progress and resets to a compact
 // context — exactly how Roo Code avoids stopping mid-task.
+// DeepSeek V4 (Flash and Pro) both ship a 1,048,576-token window by default
+// (1M context is the V4 floor, not a premium tier). Ref: api-docs.deepseek.com.
 const CONTEXT_WINDOWS: Record<string, number> = {
-    'deepseek-v4-flash': 65_536,
-    'deepseek-v4-pro':   131_072,
+    'deepseek-v4-flash': 1_048_576,
+    'deepseek-v4-pro':   1_048_576,
 };
-const CONTEXT_WINDOW = CONTEXT_WINDOWS[MODEL] ?? 65_536;
-const CONDENSE_AT    = Math.floor(CONTEXT_WINDOW * 0.65);
+const CONTEXT_WINDOW = CONTEXT_WINDOWS[MODEL] ?? 1_048_576;
+const CONDENSE_AT    = Math.floor(CONTEXT_WINDOW * 0.65);  // ~681K — a genuine last-resort safety net
 
 // Allowlisted shell commands DeepSeek may run for self-verification.
 // Off by default — only active when the user explicitly configures entries.
@@ -579,8 +581,9 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
     const manifest: Manifest = resume
         ? { ...resume.manifest }
         : { created: [], modified: [], skipped: [], proposed: [] };
-    let totalInputTokens  = 0;
+    let totalInputTokens  = 0;   // cumulative across iterations — for billing/cost
     let totalOutputTokens = 0;
+    let contextTokens     = 0;   // size of the CURRENT context (last prompt) — for the condensation trigger
 
     const postureDesc =
         policy.posture === 'read'        ? 'READ — list and read files only, no writes' :
@@ -631,11 +634,14 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         if (fs.existsSync(KILL_FILE)) { try { fs.unlinkSync(KILL_FILE); } catch {} throw new Error('__killed__'); }
 
         // ── Context condensation (Roo-style) ──────────────────────────────────
-        // When the rolling input-token count approaches the context window, ask
-        // DeepSeek to summarise its own progress, then shrink the message history
-        // down to that summary and keep looping — no stop, no resume needed.
-        if (totalInputTokens > CONDENSE_AT && messages.length > 3) {
-            postEvent('condensing', { tokensSoFar: totalInputTokens, contextWindow: CONTEXT_WINDOW });
+        // When the CURRENT context size approaches the window, ask DeepSeek to
+        // summarise its own progress, then shrink the message history down to that
+        // summary and keep looping — no stop, no resume needed.
+        // NOTE: trigger on `contextTokens` (the last prompt's measured size), NOT a
+        // cumulative sum — each iteration re-sends the whole history, so summing
+        // prompt_tokens across iterations vastly over-counts the real context.
+        if (contextTokens > CONDENSE_AT && messages.length > 3) {
+            postEvent('condensing', { contextTokens, contextWindow: CONTEXT_WINDOW });
             try {
                 const cr = await client.chat.completions.create({
                     model: policy.model,
@@ -669,7 +675,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
                     { role: 'assistant', content: `[Context condensed — iteration ${i + 1}]\n${summary}` },
                     { role: 'user',      content: 'Context condensed. Continue with the remaining steps listed above.' }
                 );
-                totalInputTokens = 0;   // fresh context — counter resets
+                contextTokens = 0;   // fresh context — re-measured on the next response
             } catch { /* condensation failed — continue anyway; may hit API context limit but never crashes the task */ }
         }
 
@@ -699,8 +705,11 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         clearInterval(killPoll);
 
         if (response.usage) {
-            totalInputTokens  += response.usage.prompt_tokens;
+            totalInputTokens  += response.usage.prompt_tokens;       // cumulative — billing
             totalOutputTokens += response.usage.completion_tokens;
+            // Current context ≈ this prompt + the reply it generated; the next
+            // iteration's prompt grows from here (assistant msg + tool results).
+            contextTokens = response.usage.prompt_tokens + response.usage.completion_tokens;
         }
 
         const choice = response.choices[0];
@@ -712,6 +721,8 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
                 iteration: i + 1,
                 input: response.usage.prompt_tokens,
                 output: response.usage.completion_tokens,
+                contextTokens,
+                contextWindow: CONTEXT_WINDOW,
             });
         }
 
