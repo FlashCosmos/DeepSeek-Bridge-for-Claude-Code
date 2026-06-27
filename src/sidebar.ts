@@ -803,10 +803,10 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     const now = new Date();
     const ts  = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // NOTE: this whole function is emitted INSIDE buildHtml's template literal,
-    // so regex literals must escape backslashes: write /\\n/g (not /\n/g) — a
-    // bare \n collapses to a real newline and breaks the regex (and the whole
-    // webview script) with "Invalid regular expression: missing /".
+    // NOTE: this function is emitted INSIDE buildHtml's template literal.
+    // Regex backslashes must be doubled in source, e.g. /\\n/g not slash-n-slash.
+    // A single backslash is consumed by the template, splitting the regex across
+    // lines and crashing the entire webview script with a syntax error.
     let text = '';
     switch (eventType) {
       case 'task_start':
