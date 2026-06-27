@@ -1,6 +1,43 @@
 # Changelog
 
+## 1.1.23
+- **Automatic model switching**: New sidebar setting — **No** (fixed), **Ask** (approval popup before switching), or **Yes** (Claude picks Flash vs Pro freely per task). The model used is shown in every response header.
+- `run_deepseek_task` now accepts a `model: "flash" | "pro"` parameter. In **Ask** mode this triggers the same approval popup used for shell commands, showing the cost implication. In **No** mode the parameter is silently ignored.
+- Cost tracking and history now reflect the actual model used per call, not the server default.
+
+## 1.1.22
+- **Context condensation (Roo-style)**: When the context window reaches ~65% capacity mid-task, the agent writes a compact progress summary, replaces its message history with it, and continues — no stop, no resume required. Tasks that previously exhausted the context now complete in a single call.
+- **Manifest deduplication**: Files written in multiple passes (chunked writes) now appear exactly once in the manifest instead of once per write.
+- **Version stamp**: Every tool response now begins with `[DeepSeek Bridge vX.Y.Z | model: ...]` so test logs and orchestrators can always confirm which build and model ran.
+- **Per-call `maxIterations`**: Claude can pass a custom iteration cap per task (default: 500, the runaway guard). Rarely needed now that condensation handles longevity.
+- Tool description updated to clarify that `resumeId` only appears if the 500-iteration runaway guard fires, which does not happen under normal conditions.
+
+## 1.1.21 *(merged into 1.1.22)*
+- Per-call `maxIterations` parameter added to `run_deepseek_task`.
+- Limit-hit message now includes iterations used and suggests the exact resume call with a doubled cap.
+
+## 1.1.20
+- Fix: protective comment that reintroduced the same webview crash from 1.1.19.
+
+## 1.1.19
+- Fix: sidebar webview script crash caused by a bare `/\n/g` regex inside a template literal (backslash must be doubled in template strings).
+
+## 1.1.18
+- Decouple from VS Code SecretStorage for headless/remote environments. API key is now written directly to `~/.claude.json` as the authoritative source; SecretStorage is used as a best-effort cache only. The sidebar "Not configured" state on remote-SSH is cosmetic — the extension still functions.
+
+## 1.1.16 – 1.1.17
+- **Run-until-done loop**: Agent now exits naturally when DeepSeek signals completion (`finish_reason: stop`) rather than being cut off at a fixed iteration count.
+- **Stuck detection**: If the model repeats the same tool call 4 times in a row without progress, the loop exits gracefully with a resume handle.
+- **Per-call posture / writePaths / dryRun**: Claude can scope each task tightly — restricting writes to specific glob patterns, requesting read-only analysis, or getting a dry-run diff before committing changes.
+- **Line-numbered reads**: All file content is delivered with 1-based line numbers (`N\tcontent`) so the agent can anchor references to exact lines.
+- **Structured manifest**: Every `run_deepseek_task` response includes `{ created, modified, skipped }` so the orchestrator can verify programmatically.
+- **Resume handle**: Tasks that hit the iteration cap save their full conversation state and return a `resumeId`. Calling again with that ID continues exactly where it stopped.
+- **Secret denylist expanded**: Added `auth.json` (Composer credentials), `*.pem` / `*.key`, `storage/logs/` (may contain PII), and `*.sqlite` databases.
+- Self-heal MCP server path after publisher/version change.
+
 ## 1.1.8
+- **README**: Clarified that Node.js is not a user requirement — Claude Code already includes it.
+- **Icon**: Updated extension icon to new logo.
 - **README**: Clarified that Node.js is not a user requirement — Claude Code already includes it.
 - **Icon**: Updated extension icon to new logo.
 
