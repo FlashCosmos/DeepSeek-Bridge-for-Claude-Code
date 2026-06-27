@@ -12,9 +12,21 @@ import { isWorkspaceEnabled } from './control';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
+const EXTENSION_VERSION = '1.1.22';   // keep in sync with package.json
+
 const API_KEY = process.env['DEEPSEEK_API_KEY'];
 const MODEL   = process.env['DEEPSEEK_MODEL'] ?? 'deepseek-v4-flash';
 const RAW_POSTURE = (process.env['DEEPSEEK_POSTURE'] ?? 'edit').toLowerCase();
+
+// Context window sizes per model. When the running input-token count crosses
+// CONDENSE_AT, the agent summarises its own progress and resets to a compact
+// context — exactly how Roo Code avoids stopping mid-task.
+const CONTEXT_WINDOWS: Record<string, number> = {
+    'deepseek-v4-flash': 65_536,
+    'deepseek-v4-pro':   131_072,
+};
+const CONTEXT_WINDOW = CONTEXT_WINDOWS[MODEL] ?? 65_536;
+const CONDENSE_AT    = Math.floor(CONTEXT_WINDOW * 0.65);
 
 // Allowlisted shell commands DeepSeek may run for self-verification.
 // Off by default — only active when the user explicitly configures entries.
@@ -41,7 +53,7 @@ interface ResumeState {
     prompt:   string;
     messages: OpenAI.Chat.ChatCompletionMessageParam[];
     manifest: { created: string[]; modified: string[]; skipped: string[]; proposed: Array<{ path: string; content: string }> };
-    policy:   { posture: string; writePaths: string[] | null; dryRun: boolean };
+    policy:   { posture: string; writePaths: string[] | null; dryRun: boolean; maxIterations?: number };
 }
 
 function generateResumeId(): string {
@@ -236,9 +248,10 @@ function clampPosture(requested: unknown): TaskPosture {
 }
 
 interface CallPolicy {
-    posture:    TaskPosture;
-    writePaths: string[] | null;  // null = no extra restriction
-    dryRun:     boolean;
+    posture:       TaskPosture;
+    writePaths:    string[] | null;  // null = no extra restriction
+    dryRun:        boolean;
+    maxIterations: number;           // per-call override, clamped to LIMITS.maxIterations
 }
 
 interface Manifest {
@@ -374,8 +387,13 @@ function toolWriteFile(
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content, 'utf8');
 
-    if (exists) manifest.modified.push(relPath);
-    else        manifest.created.push(relPath);
+    // Track each path only once regardless of how many times the engine rewrites it
+    // (chunked writes produce duplicate entries otherwise — e.g. affiliate.md × 4).
+    const alreadyTracked = manifest.created.includes(relPath) || manifest.modified.includes(relPath);
+    if (!alreadyTracked) {
+        if (exists) manifest.modified.push(relPath);
+        else        manifest.created.push(relPath);
+    }
 
     return `Written ${bytes} bytes to ${relPath}`;
 }
@@ -587,10 +605,54 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
     let finalSummary = '';
     let stuck = false;
     let consecutiveMistakes = 0;
+    const iterationCap = Math.min(policy.maxIterations, LIMITS.maxIterations);
 
-    for (let i = 0; i < LIMITS.maxIterations; i++) {
+    for (let i = 0; i < iterationCap; i++) {
         // Check kill file before starting the API call.
         if (fs.existsSync(KILL_FILE)) { try { fs.unlinkSync(KILL_FILE); } catch {} throw new Error('__killed__'); }
+
+        // ── Context condensation (Roo-style) ──────────────────────────────────
+        // When the rolling input-token count approaches the context window, ask
+        // DeepSeek to summarise its own progress, then shrink the message history
+        // down to that summary and keep looping — no stop, no resume needed.
+        if (totalInputTokens > CONDENSE_AT && messages.length > 3) {
+            postEvent('condensing', { tokensSoFar: totalInputTokens, contextWindow: CONTEXT_WINDOW });
+            try {
+                const cr = await client.chat.completions.create({
+                    model: MODEL,
+                    messages: [
+                        ...messages,
+                        {
+                            role: 'user',
+                            content:
+                                'CONTEXT CONDENSATION CHECKPOINT.\n' +
+                                'The context window is nearly full. Write a thorough progress summary so the task can continue in a fresh context:\n' +
+                                '1. Original task goal (one sentence)\n' +
+                                '2. Every file you read: path + the key facts or code you extracted\n' +
+                                '3. Every file you wrote or modified: path + what was written\n' +
+                                '4. The exact remaining steps needed to fully complete the task\n' +
+                                'This summary REPLACES your entire conversation history — include every detail you will need.',
+                        },
+                    ],
+                    max_tokens: 3000,
+                } as Parameters<typeof client.chat.completions.create>[0]);
+                const summary = (cr as { choices: Array<{ message: { content: string | null } }> }).choices[0]?.message?.content
+                    ?? '(condensation produced no output)';
+                if ((cr as { usage?: { completion_tokens: number } }).usage) {
+                    totalOutputTokens += (cr as { usage: { completion_tokens: number } }).usage.completion_tokens;
+                }
+                // Rebuild: system message + original user task + condensed summary + continue prompt.
+                const systemMsg  = messages.find(m => m.role === 'system');
+                const firstUser  = messages.find(m => m.role === 'user');
+                messages.splice(0, messages.length,
+                    ...(systemMsg ? [systemMsg] : []),
+                    ...(firstUser ? [firstUser] : []),
+                    { role: 'assistant', content: `[Context condensed — iteration ${i + 1}]\n${summary}` },
+                    { role: 'user',      content: 'Context condensed. Continue with the remaining steps listed above.' }
+                );
+                totalInputTokens = 0;   // fresh context — counter resets
+            } catch { /* condensation failed — continue anyway; may hit API context limit but never crashes the task */ }
+        }
 
         // Poll the kill file every 500 ms while the API call is in flight so
         // Stop takes effect immediately rather than waiting for DeepSeek to respond.
@@ -704,16 +766,17 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
                 prompt,
                 messages,
                 manifest,
-                policy:  { posture: policy.posture, writePaths: policy.writePaths, dryRun: policy.dryRun },
+                policy:  { posture: policy.posture, writePaths: policy.writePaths, dryRun: policy.dryRun, maxIterations: policy.maxIterations },
             });
         } catch {
             resumeId = undefined;
         }
+        const iterInfo = `Iterations used: ${iterationCap}/${LIMITS.maxIterations}.`;
         const reason = stuck
             ? `Agent stopped: it repeated the same tool calls ${LIMITS.maxConsecutiveMistakes} times in a row without progress (likely stuck). Adding a steering hint when you resume usually unblocks it.`
-            : `Agent paused after hitting the iteration limit.`;
+            : `Agent paused: hit the per-call iteration limit (${iterationCap}). ${iterInfo} To grant more headroom, resume with a higher maxIterations (up to ${LIMITS.maxIterations}).`;
         finalSummary = resumeId
-            ? `${reason} ${touchedStr}\n\nResume ID: ${resumeId}\nCall run_deepseek_task with { resumeId: "${resumeId}" } to continue exactly where it stopped — same context, no re-reading files.`
+            ? `${reason} ${touchedStr}\n\nResume ID: ${resumeId}\nCall run_deepseek_task with { resumeId: "${resumeId}", maxIterations: ${Math.min(iterationCap * 2, LIMITS.maxIterations)} } to continue exactly where it stopped — same context, no re-reading files.`
             : `${reason} ${touchedStr} Decompose into smaller tasks for reliable completion.`;
     }
 
@@ -777,8 +840,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 `Confined to the workspace (${ROOT}). No network; secret files are blocked. ` +
                 `Server max posture: ${MAX_POSTURE}. ` +
                 'Shell self-verify available — commands prompt the user for approval unless pre-approved in the sidebar. ' +
-                'Returns a structured manifest (created/modified/skipped files) plus a prose summary. ' +
-                'If the task hits the iteration limit, returns a resumeId — call again with that id to continue exactly where it stopped (same conversation context, partial manifest preserved). ' +
+                'Returns a structured manifest (created/modified/skipped files) — each path listed once even for chunked/multi-pass writes — plus a prose summary. ' +
+                'Context condensation runs automatically when the context window fills: the agent summarises its own progress and continues without stopping or returning a resumeId. ' +
+                'Under normal conditions tasks complete without any resumeId — that field only appears if the hard 500-iteration runaway guard is hit. ' +
+                'File reads are returned with 1-based line numbers (N\\tcontent) so the agent can anchor method/symbol references exactly. ' +
                 'Use for: refactors, codegen, multi-file edits, analysis, summarization of large file sets.',
             inputSchema: {
                 type: 'object' as const,
@@ -812,6 +877,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                         description:
                             'If true, proposed file writes are returned without being applied. ' +
                             'Use to review changes before committing them.'
+                    },
+                    maxIterations: {
+                        type: 'number',
+                        description:
+                            `Hard cap on tool-call iterations (default: ${LIMITS.maxIterations}, max: ${LIMITS.maxIterations}). ` +
+                            'Context condensation runs automatically when the context window fills — tasks run to completion without hitting this limit under normal conditions. ' +
+                            'Only lower this if you want a deliberate early stop.'
                     }
                 },
                 required: []
@@ -855,7 +927,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 deepseekCostUsd: calcCost(MODEL, response.usage.prompt_tokens, response.usage.completion_tokens),
             });
         }
-        return { content: [{ type: 'text' as const, text }] };
+        return { content: [{ type: 'text' as const, text: `[DeepSeek Bridge v${EXTENSION_VERSION} | model: ${MODEL}]\n${text}` }] };
     }
 
     if (name === 'run_deepseek_task') {
@@ -875,10 +947,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (!prompt && !resume) throw new Error('prompt must be a non-empty string');
 
+        const rawMaxIter = typeof a['maxIterations'] === 'number' ? Math.floor(a['maxIterations'] as number) : undefined;
         const policy: CallPolicy = {
-            posture:    clampPosture(a['posture'] ?? resume?.policy.posture),
-            writePaths: Array.isArray(a['writePaths']) ? (a['writePaths'] as string[]) : (resume?.policy.writePaths ?? null),
-            dryRun:     a['dryRun'] !== undefined ? a['dryRun'] === true : (resume?.policy.dryRun ?? false),
+            posture:       clampPosture(a['posture'] ?? resume?.policy.posture),
+            writePaths:    Array.isArray(a['writePaths']) ? (a['writePaths'] as string[]) : (resume?.policy.writePaths ?? null),
+            dryRun:        a['dryRun'] !== undefined ? a['dryRun'] === true : (resume?.policy.dryRun ?? false),
+            maxIterations: Math.max(1, Math.min(rawMaxIter ?? resume?.policy.maxIterations ?? LIMITS.maxIterations, LIMITS.maxIterations)),
         };
 
         // Clear any stale kill signal left over from a previous task.
@@ -905,9 +979,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (result.skipped.length)   manifestObj['skipped']  = result.skipped;
         if (result.proposed.length)  manifestObj['proposed'] = result.proposed;
 
+        const header = `[DeepSeek Bridge v${EXTENSION_VERSION} | model: ${MODEL}]`;
         const text = Object.keys(manifestObj).length
-            ? JSON.stringify(manifestObj, null, 2) + '\n\n' + result.summary
-            : result.summary;
+            ? header + '\n' + JSON.stringify(manifestObj, null, 2) + '\n\n' + result.summary
+            : header + '\n' + result.summary;
 
         return { content: [{ type: 'text' as const, text }] };
     }
