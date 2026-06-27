@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.25
+- **Cache-aware cost tracking**. DeepSeek caches prompt prefixes automatically and bills cache hits at ~1/50 of the miss rate. The extension now reads `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` from each response and prices them separately, so the Cost History tab reflects true DeepSeek cost instead of pricing all input at the full rate. The append-only agent loop keeps the prefix stable, so multi-step tasks run mostly on cache hits.
+- **Cache-hit ratio** is now shown per task in the Cost History tab.
+- **Updated pricing table** to V4 cache-hit / cache-miss / output rates. *These are estimates based on our current knowledge of DeepSeek V4 pricing and may change — verify against api-docs.deepseek.com/quick_start/pricing.*
+- No action needed for caching itself: DeepSeek caching is automatic and server-side (unlike Anthropic, there are no `cache_control` markers to set).
+
 ## 1.1.24
 - **Correct context window: 1M tokens**. DeepSeek V4 Flash and Pro both ship a 1,048,576-token window by default (the V4 floor, not a premium tier). The extension was hardcoded to 64K/128K, causing context condensation to fire at ~5% of real capacity.
 - **Fix: condensation trigger now measures the *current* context**, not a cumulative sum of every iteration's prompt tokens. The old logic summed `prompt_tokens` across iterations — but each call re-sends the whole history, so the sum over-counted real context several-fold and triggered condensation far too early. Cumulative tokens are still tracked separately for accurate cost/billing.

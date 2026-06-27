@@ -188,12 +188,16 @@ DeepSeek runs in a strict sandbox:
 
 ## Pricing
 
-| Model | Input | Output |
-|-------|-------|--------|
-| DeepSeek V4 Flash | $0.07 / 1M tokens | $0.28 / 1M tokens |
-| DeepSeek V4 Pro | $0.55 / 1M tokens | $2.19 / 1M tokens |
+DeepSeek caches prompt prefixes automatically — no configuration, no cache-write fee. Because the agent loop keeps the system prompt and task description identical across iterations, most of the input on a multi-step task bills at the much cheaper **cache-hit** rate. The Cost History tab shows the cache-hit ratio per task.
 
-**Example:** A task using 100K input + 50K output tokens costs roughly **$0.02** with DeepSeek V4 Flash vs **$1.05** with Claude Sonnet — about 98% cheaper.
+| Model | Input (cache hit) | Input (cache miss) | Output |
+|-------|-------------------|--------------------|--------|
+| DeepSeek V4 Flash | $0.0028 / 1M | $0.14 / 1M | $0.28 / 1M |
+| DeepSeek V4 Pro | $0.0145 / 1M | $1.74 / 1M | $3.48 / 1M |
+
+> **Note:** These figures are estimates based on our current knowledge of DeepSeek V4 pricing and may change. Always verify against the official [DeepSeek pricing page](https://api-docs.deepseek.com/quick_start/pricing). The extension's cost calculations use these same estimates.
+
+**Example:** A multi-step task using ~100K input (mostly cache hits) + 50K output on V4 Flash costs roughly **$0.02**, versus around **$1.05** with a frontier Claude model — about 98% cheaper.
 
 ---
 

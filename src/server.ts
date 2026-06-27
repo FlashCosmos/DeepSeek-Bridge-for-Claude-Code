@@ -12,7 +12,7 @@ import { isWorkspaceEnabled } from './control';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const EXTENSION_VERSION = '1.1.24';   // keep in sync with package.json
+const EXTENSION_VERSION = '1.1.25';   // keep in sync with package.json
 
 const API_KEY     = process.env['DEEPSEEK_API_KEY'];
 const MODEL       = process.env['DEEPSEEK_MODEL'] ?? 'deepseek-v4-flash';
@@ -111,14 +111,42 @@ function getDynamicAllowlist(): string[] {
 
 // ── Cost tracking ──────────────────────────────────────────────────────────────
 
-const DEEPSEEK_PRICING: Record<string, { input: number; output: number }> = {
-    'deepseek-v4-flash': { input: 0.07,  output: 0.28  },
-    'deepseek-v4-pro':   { input: 0.55,  output: 2.19  },
+// Per-1M-token USD rates. NOTE: these are ESTIMATES based on our knowledge of
+// DeepSeek V4 pricing (2026) and may drift — verify against the live rate card
+// at https://api-docs.deepseek.com/quick_start/pricing.
+// DeepSeek caches prompt prefixes automatically (no cache_control needed); a
+// cache hit bills input at ~1/50 of the miss rate, so the real cost of a task
+// depends heavily on its cache-hit ratio — which our append-only agent loop
+// maximises (stable system+task prefix, only the tail grows each iteration).
+const DEEPSEEK_PRICING: Record<string, { cacheHit: number; cacheMiss: number; output: number }> = {
+    'deepseek-v4-flash': { cacheHit: 0.0028, cacheMiss: 0.14, output: 0.28 },
+    'deepseek-v4-pro':   { cacheHit: 0.0145, cacheMiss: 1.74, output: 3.48 },
 };
 
-function calcCost(model: string, inputTok: number, outputTok: number): number {
+// Cache-aware cost. Callers that don't know the hit/miss split pass it all as
+// cacheMiss (the conservative, higher estimate).
+function calcCost(model: string, cacheHitTok: number, cacheMissTok: number, outputTok: number): number {
     const p = DEEPSEEK_PRICING[model] ?? DEEPSEEK_PRICING['deepseek-v4-flash'];
-    return (inputTok / 1_000_000) * p.input + (outputTok / 1_000_000) * p.output;
+    return (cacheHitTok  / 1_000_000) * p.cacheHit
+         + (cacheMissTok / 1_000_000) * p.cacheMiss
+         + (outputTok    / 1_000_000) * p.output;
+}
+
+// DeepSeek's usage object extends the OpenAI shape with cache accounting.
+interface DeepSeekUsage {
+    prompt_tokens:            number;
+    completion_tokens:        number;
+    prompt_cache_hit_tokens?:  number;
+    prompt_cache_miss_tokens?: number;
+}
+
+// Split a usage object into {hit, miss}. Falls back to all-miss when the API
+// doesn't report cache fields (keeps cost conservative rather than crashing).
+function cacheSplit(u: DeepSeekUsage | undefined): { hit: number; miss: number } {
+    if (!u) return { hit: 0, miss: 0 };
+    const hit  = u.prompt_cache_hit_tokens ?? 0;
+    const miss = u.prompt_cache_miss_tokens ?? Math.max(0, u.prompt_tokens - hit);
+    return { hit, miss };
 }
 
 interface HistoryEntry {
@@ -129,7 +157,9 @@ interface HistoryEntry {
     model:           string;
     inputTokens:     number;
     outputTokens:    number;
-    deepseekCostUsd: number;
+    cacheHitTokens?:  number;   // portion of input billed at the cache-hit rate
+    cacheMissTokens?: number;   // portion billed at the full (miss) rate
+    deepseekCostUsd: number;    // cache-aware estimate
 }
 
 function appendHistory(entry: HistoryEntry): void {
@@ -581,9 +611,11 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
     const manifest: Manifest = resume
         ? { ...resume.manifest }
         : { created: [], modified: [], skipped: [], proposed: [] };
-    let totalInputTokens  = 0;   // cumulative across iterations — for billing/cost
-    let totalOutputTokens = 0;
-    let contextTokens     = 0;   // size of the CURRENT context (last prompt) — for the condensation trigger
+    let totalInputTokens     = 0;   // cumulative across iterations — for billing/cost
+    let totalOutputTokens    = 0;
+    let totalCacheHitTokens  = 0;   // cumulative cache-hit input — billed at the cheap rate
+    let totalCacheMissTokens = 0;   // cumulative cache-miss input — billed at the full rate
+    let contextTokens        = 0;   // size of the CURRENT context (last prompt) — for the condensation trigger
 
     const postureDesc =
         policy.posture === 'read'        ? 'READ — list and read files only, no writes' :
@@ -663,8 +695,13 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
                 } as Parameters<typeof client.chat.completions.create>[0]);
                 const summary = (cr as { choices: Array<{ message: { content: string | null } }> }).choices[0]?.message?.content
                     ?? '(condensation produced no output)';
-                if ((cr as { usage?: { completion_tokens: number } }).usage) {
-                    totalOutputTokens += (cr as { usage: { completion_tokens: number } }).usage.completion_tokens;
+                const cu = (cr as { usage?: DeepSeekUsage }).usage;
+                if (cu) {
+                    totalInputTokens  += cu.prompt_tokens;
+                    totalOutputTokens += cu.completion_tokens;
+                    const { hit, miss } = cacheSplit(cu);
+                    totalCacheHitTokens  += hit;
+                    totalCacheMissTokens += miss;
                 }
                 // Rebuild: system message + original user task + condensed summary + continue prompt.
                 const systemMsg  = messages.find(m => m.role === 'system');
@@ -705,11 +742,15 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         clearInterval(killPoll);
 
         if (response.usage) {
-            totalInputTokens  += response.usage.prompt_tokens;       // cumulative — billing
-            totalOutputTokens += response.usage.completion_tokens;
+            const u = response.usage as unknown as DeepSeekUsage;
+            totalInputTokens  += u.prompt_tokens;                    // cumulative — billing
+            totalOutputTokens += u.completion_tokens;
+            const { hit, miss } = cacheSplit(u);
+            totalCacheHitTokens  += hit;
+            totalCacheMissTokens += miss;
             // Current context ≈ this prompt + the reply it generated; the next
             // iteration's prompt grows from here (assistant msg + tool results).
-            contextTokens = response.usage.prompt_tokens + response.usage.completion_tokens;
+            contextTokens = u.prompt_tokens + u.completion_tokens;
         }
 
         const choice = response.choices[0];
@@ -814,7 +855,9 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         summary: finalSummary.slice(0, 150),
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
-        costUsd: calcCost(policy.model, totalInputTokens, totalOutputTokens),
+        cacheHitTokens: totalCacheHitTokens,
+        cacheMissTokens: totalCacheMissTokens,
+        costUsd: calcCost(policy.model, totalCacheHitTokens, totalCacheMissTokens, totalOutputTokens),
     });
 
     appendHistory({
@@ -825,7 +868,9 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         model:           policy.model,
         inputTokens:     totalInputTokens,
         outputTokens:    totalOutputTokens,
-        deepseekCostUsd: calcCost(policy.model, totalInputTokens, totalOutputTokens),
+        cacheHitTokens:  totalCacheHitTokens,
+        cacheMissTokens: totalCacheMissTokens,
+        deepseekCostUsd: calcCost(policy.model, totalCacheHitTokens, totalCacheMissTokens, totalOutputTokens),
     });
 
     return {
@@ -956,15 +1001,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const response = await client.chat.completions.create({ model: MODEL, messages, max_tokens: 8192 });
         const text = response.choices[0]?.message?.content ?? '(no response)';
         if (response.usage) {
+            const u = response.usage as unknown as DeepSeekUsage;
+            const { hit, miss } = cacheSplit(u);
             appendHistory({
                 id:              Math.random().toString(36).slice(2, 10),
                 timestamp:       new Date().toISOString(),
                 tool:            'ask_deepseek',
                 summary:         text.slice(0, 140).replace(/\n/g, ' '),
                 model:           MODEL,
-                inputTokens:     response.usage.prompt_tokens,
-                outputTokens:    response.usage.completion_tokens,
-                deepseekCostUsd: calcCost(MODEL, response.usage.prompt_tokens, response.usage.completion_tokens),
+                inputTokens:     u.prompt_tokens,
+                outputTokens:    u.completion_tokens,
+                cacheHitTokens:  hit,
+                cacheMissTokens: miss,
+                deepseekCostUsd: calcCost(MODEL, hit, miss, u.completion_tokens),
             });
         }
         return { content: [{ type: 'text' as const, text: `[DeepSeek Bridge v${EXTENSION_VERSION} | model: ${MODEL}]\n${text}` }] };

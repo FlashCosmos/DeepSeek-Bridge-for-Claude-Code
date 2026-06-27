@@ -428,6 +428,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     .cost-ds  { color: #3fb950; font-variant-numeric: tabular-nums; }
     .cost-claude { opacity: 0.7; font-variant-numeric: tabular-nums; }
     .cost-saved { color: #3fb950; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .cost-cache { color: #58a6ff; font-variant-numeric: tabular-nums; }
 
     .history-totals {
       margin-top: 10px; padding: 10px;
@@ -1225,6 +1226,12 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       const pct        = claudeCost > 0 ? Math.round((saved / claudeCost) * 100) : 0;
       lifeDsCost    += e.deepseekCostUsd;
       lifeClaudeCost += claudeCost;
+      // Cache-hit ratio, when the server recorded it (older entries won't have it).
+      const cacheTot  = (e.cacheHitTokens || 0) + (e.cacheMissTokens || 0);
+      const cachePct  = cacheTot > 0 ? Math.round(((e.cacheHitTokens || 0) / cacheTot) * 100) : null;
+      const cacheRow  = cachePct !== null
+        ? \`<div class="cost-row"><span class="cost-label">Cache hit</span><span class="cost-cache">\${cachePct}%</span></div>\`
+        : '';
       return \`<div class="history-entry">
         <div class="history-meta">
           <span class="history-date">\${esc(fmtDate(e.timestamp))}</span>
@@ -1235,6 +1242,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
           <div class="cost-row"><span class="cost-label">DeepSeek</span><span class="cost-ds">\${fmt(e.deepseekCostUsd)}</span></div>
           <div class="cost-row"><span class="cost-label">\${esc(label)}</span><span class="cost-claude">\${fmt(claudeCost)}</span></div>
           <div class="cost-row"><span class="cost-label">Saved</span><span class="cost-saved">\${fmt(saved)} (\${pct}%)</span></div>
+          \${cacheRow}
         </div>
       </div>\`;
     }).join('');
