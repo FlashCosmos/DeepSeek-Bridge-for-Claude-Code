@@ -115,8 +115,13 @@ function buildScopeOptions(command: string): ScopeOption[] {
 
 async function startApprovalServer(context: vscode.ExtensionContext, provider: DeepSeekSidebarProvider): Promise<void> {
     const server = http.createServer(async (req, res) => {
-        // Authenticate every request with the per-session token.
-        if (req.method === 'POST' && (req.headers['x-bridge-token'] ?? '') !== SESSION_TOKEN) {
+        // The token gates the security-sensitive endpoint (/approve — raising popups
+        // and persisting allow-list entries). /event and /running are display-only
+        // (live console + running indicator); leaving them unauthenticated means the
+        // UI is never silently dark from a token/key mismatch or an old server still
+        // running mid-upgrade. Spoofing them is cosmetic at worst.
+        if (req.method === 'POST' && req.url === '/approve'
+            && (req.headers['x-bridge-token'] ?? '') !== SESSION_TOKEN) {
             res.writeHead(403).end();
             return;
         }
@@ -345,12 +350,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand('deepseek-bridge.copyDiagnostics', async () => {
             const settings = readSettings();
             const wsPath = currentWorkspacePath();
+            const wsKey  = workspaceKey(wsPath);
             let auditTail = '';
             try {
-                const log = path.join(AUDIT_DIR, `${workspaceKey(wsPath)}.log`);
+                const log = path.join(AUDIT_DIR, `${wsKey}.log`);
                 const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
                 auditTail = lines.slice(-20).join('\n');
             } catch { auditTail = '(no audit log)'; }
+            // Channel state — the thing that breaks the live console / approvals.
+            const portsDir = path.join(CLAUDE_DIR, 'deepseek-ports');
+            let portFiles = '(none)'; let activePort = '(none)';
+            try { portFiles = fs.readdirSync(portsDir).join(', ') || '(empty)'; } catch { /* ignore */ }
+            try { activePort = String((JSON.parse(fs.readFileSync(path.join(portsDir, '_active.json'), 'utf8')) as { port?: number }).port ?? '?'); } catch { /* ignore */ }
+            let serverPath = '(unknown)';
+            try {
+                const cj = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')) as { mcpServers?: { deepseek?: { args?: string[] } } };
+                serverPath = cj.mcpServers?.deepseek?.args?.[0] ?? '(not registered)';
+            } catch { /* ignore */ }
             const diag = [
                 `DeepSeek Bridge diagnostics`,
                 `version: ${(context.extension?.packageJSON as { version?: string })?.version ?? 'dev'}`,
@@ -359,6 +375,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 `fullPermissions: ${settings.fullPermissions}  allowCommands: ${settings.allowCommands.length}`,
                 `workspace configured: ${!!readExistingMcpKey()}  enabled here: ${wsPath ? isWorkspaceEnabled(wsPath) : 'n/a'}`,
                 `remote: ${vscode.env.remoteName ?? 'local'}`,
+                `workspace key: ${wsKey}`,
+                `registered server path: ${serverPath}`,
+                `approval channel — port files: [${portFiles}]  active port: ${activePort}`,
                 ``,
                 `recent audit (last 20):`,
                 auditTail,

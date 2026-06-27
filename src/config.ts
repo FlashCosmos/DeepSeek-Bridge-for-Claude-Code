@@ -168,19 +168,31 @@ export function writeRuntimeSettings(settings: BridgeSettings, fullPermissions: 
  * Also writes the legacy single port file for backward compatibility.
  */
 export function writePortFile(wsKey: string, port: number, token: string): void {
-    const dir = claudeDir();
+    const portsDir = path.join(claudeDir(), 'deepseek-ports');
+    const payload  = JSON.stringify({ port, token, wsKey });
     try {
-        fs.mkdirSync(path.join(dir, 'deepseek-ports'), { recursive: true });
-        fs.writeFileSync(
-            path.join(dir, 'deepseek-ports', `${wsKey}.json`),
-            JSON.stringify({ port, token }),
-            'utf8'
-        );
+        fs.mkdirSync(portsDir, { recursive: true });
+        // Per-window file (multi-window routing) ...
+        fs.writeFileSync(path.join(portsDir, `${wsKey}.json`), payload, 'utf8');
+        // ... plus a global "most-recently-active window" pointer so the server can
+        // always find a live endpoint in the common single-window case, even if its
+        // CLAUDE_PROJECT_DIR-derived key doesn't normalize to the extension's.
+        fs.writeFileSync(path.join(portsDir, '_active.json'), payload, 'utf8');
     } catch { /* non-fatal — allowlist still works without the popup server */ }
+    // Legacy plain-int port file, so a pre-1.2 server still running during an upgrade
+    // (before the user reconnects Claude Code) can at least stream the live console.
+    try { fs.writeFileSync(path.join(claudeDir(), 'deepseek-bridge-port'), String(port), 'utf8'); } catch { /* ignore */ }
 }
 
 export function removePortFile(wsKey: string): void {
-    try { fs.unlinkSync(path.join(claudeDir(), 'deepseek-ports', `${wsKey}.json`)); } catch { /* ignore */ }
+    const portsDir = path.join(claudeDir(), 'deepseek-ports');
+    try { fs.unlinkSync(path.join(portsDir, `${wsKey}.json`)); } catch { /* ignore */ }
+    // Clear _active only if it still points at this window (avoid stranding another).
+    try {
+        const a = JSON.parse(fs.readFileSync(path.join(portsDir, '_active.json'), 'utf8')) as { wsKey?: string };
+        if (a.wsKey === wsKey) fs.unlinkSync(path.join(portsDir, '_active.json'));
+    } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(claudeDir(), 'deepseek-bridge-port')); } catch { /* ignore */ }
 }
 
 export function writeMcpConfig(

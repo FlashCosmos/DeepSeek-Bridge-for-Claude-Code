@@ -229,16 +229,46 @@ const sessionApproved = new Set<string>();
 
 // ── Per-window approval-server endpoint (port + auth token) ─────────────────────
 
-function getApprovalEndpoint(): { port: number; token: string } | null {
-    // Per-window file only: it carries the auth token the approval server requires.
-    // (The legacy token-less global port file would be rejected with 403, so we
-    // don't fall back to it — a clean "no endpoint" degradation beats a 403 storm.)
+function readPortFile(file: string): { port: number; token: string } | null {
     try {
-        const raw = fs.readFileSync(path.join(PORTS_DIR, `${WS_KEY}.json`), 'utf8');
-        const parsed = JSON.parse(raw) as { port?: number; token?: string };
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { port?: number; token?: string };
         if (parsed.port && parsed.token) return { port: parsed.port, token: parsed.token };
-    } catch { /* no endpoint available */ }
+    } catch { /* ignore */ }
     return null;
+}
+
+// Resolve the extension's approval/event endpoint. Robust to a workspace-key
+// mismatch between the server (CLAUDE_PROJECT_DIR) and the extension (VS Code
+// workspace path): falls back to the most-recently-active window, then to a lone
+// port file. This is what keeps the live console + approval popups working.
+function getApprovalEndpoint(): { port: number; token: string } | null {
+    // 1. Exact per-window match (correct routing when several windows are open).
+    const exact = readPortFile(path.join(PORTS_DIR, `${WS_KEY}.json`));
+    if (exact) return exact;
+    // 2. Most-recently-active window (covers the common single-window case + key drift).
+    const active = readPortFile(path.join(PORTS_DIR, '_active.json'));
+    if (active) return active;
+    // 3. If exactly one per-window file exists, it's unambiguous.
+    try {
+        const files = fs.readdirSync(PORTS_DIR).filter(f => /^[0-9a-f]{16}\.json$/.test(f));
+        if (files.length === 1) {
+            const only = readPortFile(path.join(PORTS_DIR, files[0]));
+            if (only) return only;
+        }
+    } catch { /* none */ }
+    return null;
+}
+
+let warnedNoEndpoint = false;
+function warnIfNoEndpoint(): void {
+    if (warnedNoEndpoint) return;
+    if (!getApprovalEndpoint()) {
+        warnedNoEndpoint = true;
+        process.stderr.write(
+            `deepseek-bridge: cannot reach the DeepSeek Bridge sidebar (no approval endpoint for workspace ${WS_KEY}). ` +
+            `Live console and command approvals are unavailable — open the DeepSeek Bridge sidebar and reconnect Claude Code.\n`
+        );
+    }
 }
 
 async function requestCommandApproval(command: string): Promise<boolean> {
@@ -460,8 +490,17 @@ async function toolRunCommand(args: Record<string, unknown>, manifest: Manifest)
         commandMatchesAllowlist(command, sessionApproved);
 
     if (!preApproved) {
+        if (!getApprovalEndpoint()) {
+            // Distinct from a real user decline: the approval UI is unreachable, so
+            // we can't even ASK. Tell the agent precisely what to do.
+            throw new Error(
+                `cannot request approval: the DeepSeek Bridge sidebar is not reachable, so '${command}' was not run. ` +
+                `Open the DeepSeek Bridge sidebar in this workspace and reconnect Claude Code, or pre-approve this command / enable Full Permissions. ` +
+                `(This is NOT a user denial.)`
+            );
+        }
         const approved = await requestCommandApproval(command);
-        if (!approved) throw new Error(`command denied: '${command}'`);
+        if (!approved) throw new Error(`command denied by user: '${command}'`);
     }
 
     const argv = parseArgv(command);
@@ -590,6 +629,7 @@ async function runAgentLoop(
     sendProgress?: ProgressFn
 ): Promise<AgentResult> {
     sessionBytes = 0;
+    warnIfNoEndpoint();   // surface a dead UI channel in the MCP logs instead of running silently
     postEvent('task_start', { prompt: (resume ? `[RESUME] ${prompt || '(continuing)'}` : prompt).slice(0, 120) });
     const callCounts = new Map<string, number>();
     const originals  = new Map<string, string>();

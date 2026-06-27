@@ -91,7 +91,7 @@ DeepSeek runs in a strict sandbox:
 - **Sensitive-file denylist (non-exhaustive)** — blocks common secret files even inside the workspace: `.env`, `.ssh/`, `.aws/`, `.kube/`, `kubeconfig`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`, `auth.json`, `*.pem`/`*.key`, `*.tfstate`/`*.tfvars`, `wp-config.php`, `*.sqlite`, `.git/`, and more. A path denylist can't catch everything — review what's in your workspace before delegating.
 - **The agent has no network tools of its own** — it can only read/write files and run approved commands. (Your code is still sent to DeepSeek's API to perform the task — see below.)
 - **`run_command` is real execution** — approving a scriptable tool (`git`, `node`, …) grants arbitrary code via that tool, which can read files the denylist protects. The approval card warns you; prefer "Exact command only".
-- **Authenticated local channel** — the approval/event server is bound to `127.0.0.1` and requires a per-session token.
+- **Authenticated local channel** — the approval/event server is bound to `127.0.0.1`; the security-sensitive approve action requires a per-session token (the display-only console/status feed is left open so the UI is never silently dark).
 - **Audit log** — every tool call is logged (with full args) to `~/.claude/deepseek-audit/<workspace>.log`, outside your repo so it can't be committed.
 
 ---
