@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.4
+- **Fixed the marketplace/README badges.** shields.io retired its Visual Studio Marketplace badge family, so the Version/Installs/Rating badges rendered as "retired badge." Switched those three to badgen.net's live `vs-marketplace` endpoints. No runtime changes.
+
 ## 1.2.3
 - **Open-source readiness.** Added `SECURITY.md` (threat model + private vulnerability reporting), `CONTRIBUTING.md`, GitHub issue/PR templates, and a clear "not affiliated with Anthropic or DeepSeek" disclaimer in the README. No runtime changes.
 

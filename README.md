@@ -2,9 +2,9 @@
 
 **Offload token-heavy work from Claude to DeepSeek — automatically, sandboxed, and fully under your control.**
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/FlashCosmos.claude-deepseek-bridge?label=marketplace)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/FlashCosmos.claude-deepseek-bridge)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/FlashCosmos.claude-deepseek-bridge)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
+[![Version](https://badgen.net/vs-marketplace/v/FlashCosmos.claude-deepseek-bridge?label=marketplace)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
+[![Installs](https://badgen.net/vs-marketplace/i/FlashCosmos.claude-deepseek-bridge)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
+[![Rating](https://badgen.net/vs-marketplace/rating/FlashCosmos.claude-deepseek-bridge)](https://marketplace.visualstudio.com/items?itemName=FlashCosmos.claude-deepseek-bridge)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 DeepSeek Bridge connects [Claude Code](https://claude.com/claude-code) to [DeepSeek](https://platform.deepseek.com) via the Model Context Protocol (MCP). When Claude hits a heavy chore — a multi-file refactor, code generation, mechanical edits, large-file analysis — it hands that work to DeepSeek at a fraction of the cost. Claude stays in charge: it plans, delegates, and reviews the result.
