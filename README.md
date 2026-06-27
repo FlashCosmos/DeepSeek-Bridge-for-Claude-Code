@@ -11,6 +11,8 @@ DeepSeek Bridge connects [Claude Code](https://claude.com/claude-code) to [DeepS
 
 The difference from a plain MCP server: **Bridge installs a delegation policy into your `CLAUDE.md`, so Claude offloads the right work on its own — you don't have to say "use DeepSeek."**
 
+> *Independent, community project — not affiliated with, endorsed by, or sponsored by Anthropic or DeepSeek.*
+
 ---
 
 ## How it works
@@ -155,5 +157,17 @@ All settings live under `deepseekBridge.*` (Settings UI) and in the sidebar:
 
 - [GitHub repository](https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge)
 - [Report an issue](https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/issues)
+- [Security policy](https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/blob/main/SECURITY.md)
+- [Contributing](https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/blob/main/CONTRIBUTING.md)
 - [DeepSeek API keys](https://platform.deepseek.com/api_keys)
 - [Claude Code](https://claude.com/claude-code)
+
+---
+
+### Disclaimer & license
+
+This is an independent, open-source project licensed under [MIT](LICENSE). It is **not
+affiliated with, endorsed by, or sponsored by Anthropic or DeepSeek.** "Claude",
+"Claude Code", "Anthropic", and "DeepSeek" are trademarks of their respective owners
+and are used here only to describe interoperability. Your code is transmitted to
+DeepSeek's API to perform tasks — see [Privacy & data handling](#privacy--data-handling).

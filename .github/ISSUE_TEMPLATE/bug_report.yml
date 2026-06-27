@@ -1,0 +1,56 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! For **security** issues, do not file here — see [SECURITY.md](https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      placeholder: e.g. 1.2.2
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Local
+        - Remote-SSH
+        - WSL
+        - Dev Container
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Run "DeepSeek Bridge: Copy Diagnostics" from the Command Palette and paste the result (it contains no secrets).
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I reconnected Claude Code (/mcp or reload window) after installing/upgrading.
+        - label: The DeepSeek Bridge sidebar is open in this workspace.

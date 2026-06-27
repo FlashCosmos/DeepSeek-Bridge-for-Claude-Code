@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.3
+- **Open-source readiness.** Added `SECURITY.md` (threat model + private vulnerability reporting), `CONTRIBUTING.md`, GitHub issue/PR templates, and a clear "not affiliated with Anthropic or DeepSeek" disclaimer in the README. No runtime changes.
+
 ## 1.2.2
 - **Console fills the tab.** The live-output log now expands to the full height of the Console tab instead of a fixed 520px box, removing the dead space below it.
 

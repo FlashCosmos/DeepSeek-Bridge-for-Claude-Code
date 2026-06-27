@@ -19,7 +19,7 @@ import {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const EXTENSION_VERSION = '1.2.2';   // keep in sync with package.json
+const EXTENSION_VERSION = '1.2.3';   // keep in sync with package.json
 
 const CLAUDE_DIR       = path.join(os.homedir(), '.claude');
 const SETTINGS_FILE    = path.join(CLAUDE_DIR, 'deepseek-settings.json');
