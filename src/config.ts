@@ -24,7 +24,8 @@ export function writeMcpConfig(
     model: string,
     posture: string,
     allowCommands: string[],
-    fullPermissions?: boolean
+    fullPermissions?: boolean,
+    modelAuto?: string
 ): void {
     const home = process.env['USERPROFILE'] ?? process.env['HOME'] ?? '';
     const serverPath = path.join(context.extensionUri.fsPath, 'out', 'server.js');
@@ -48,6 +49,7 @@ export function writeMcpConfig(
                 DEEPSEEK_API_KEY: apiKey,
                 DEEPSEEK_MODEL: model,
                 DEEPSEEK_POSTURE: posture === 'read-only' ? 'read-only' : 'edit',
+                DEEPSEEK_MODEL_AUTO: modelAuto ?? 'no',
                 ...(allowCommands.length ? { DEEPSEEK_ALLOW_COMMANDS: JSON.stringify(allowCommands) } : {})
             }
         }

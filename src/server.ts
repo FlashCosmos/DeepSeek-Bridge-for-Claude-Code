@@ -12,11 +12,29 @@ import { isWorkspaceEnabled } from './control';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const EXTENSION_VERSION = '1.1.22';   // keep in sync with package.json
+const EXTENSION_VERSION = '1.1.23';   // keep in sync with package.json
 
-const API_KEY = process.env['DEEPSEEK_API_KEY'];
-const MODEL   = process.env['DEEPSEEK_MODEL'] ?? 'deepseek-v4-flash';
+const API_KEY     = process.env['DEEPSEEK_API_KEY'];
+const MODEL       = process.env['DEEPSEEK_MODEL'] ?? 'deepseek-v4-flash';
+const MODEL_AUTO  = (process.env['DEEPSEEK_MODEL_AUTO'] ?? 'no').toLowerCase() as 'yes' | 'no' | 'ask';
 const RAW_POSTURE = (process.env['DEEPSEEK_POSTURE'] ?? 'edit').toLowerCase();
+
+// Short alias → real model ID
+const MODEL_IDS: Record<string, string> = {
+    flash: 'deepseek-v4-flash',
+    pro:   'deepseek-v4-pro',
+};
+
+async function resolveModel(requested: string | undefined): Promise<string> {
+    if (!requested || MODEL_AUTO === 'no') return MODEL;
+    const target = MODEL_IDS[requested] ?? MODEL;
+    if (target === MODEL) return MODEL;
+    if (MODEL_AUTO === 'yes') return target;
+    // 'ask' — prompt the user via the existing approval popup
+    const costNote = requested === 'pro' ? 'higher accuracy, ~8× cost' : 'faster, lower cost';
+    const approved = await requestCommandApproval(`[model switch] ${target} — ${costNote}`);
+    return approved ? target : MODEL;
+}
 
 // Context window sizes per model. When the running input-token count crosses
 // CONDENSE_AT, the agent summarises its own progress and resets to a compact
@@ -53,7 +71,7 @@ interface ResumeState {
     prompt:   string;
     messages: OpenAI.Chat.ChatCompletionMessageParam[];
     manifest: { created: string[]; modified: string[]; skipped: string[]; proposed: Array<{ path: string; content: string }> };
-    policy:   { posture: string; writePaths: string[] | null; dryRun: boolean; maxIterations?: number };
+    policy:   { posture: string; writePaths: string[] | null; dryRun: boolean; maxIterations?: number; model?: string };
 }
 
 function generateResumeId(): string {
@@ -252,6 +270,7 @@ interface CallPolicy {
     writePaths:    string[] | null;  // null = no extra restriction
     dryRun:        boolean;
     maxIterations: number;           // per-call override, clamped to LIMITS.maxIterations
+    model:         string;           // resolved model ID for this call
 }
 
 interface Manifest {
@@ -619,7 +638,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
             postEvent('condensing', { tokensSoFar: totalInputTokens, contextWindow: CONTEXT_WINDOW });
             try {
                 const cr = await client.chat.completions.create({
-                    model: MODEL,
+                    model: policy.model,
                     messages: [
                         ...messages,
                         {
@@ -666,7 +685,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         let response: Awaited<ReturnType<typeof client.chat.completions.create>>;
         try {
             response = await client.chat.completions.create({
-                model: MODEL,
+                model: policy.model,
                 messages,
                 tools,
                 max_tokens: 8192,
@@ -766,7 +785,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
                 prompt,
                 messages,
                 manifest,
-                policy:  { posture: policy.posture, writePaths: policy.writePaths, dryRun: policy.dryRun, maxIterations: policy.maxIterations },
+                policy:  { posture: policy.posture, writePaths: policy.writePaths, dryRun: policy.dryRun, maxIterations: policy.maxIterations, model: policy.model },
             });
         } catch {
             resumeId = undefined;
@@ -784,7 +803,7 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         summary: finalSummary.slice(0, 150),
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
-        costUsd: calcCost(MODEL, totalInputTokens, totalOutputTokens),
+        costUsd: calcCost(policy.model, totalInputTokens, totalOutputTokens),
     });
 
     appendHistory({
@@ -792,10 +811,10 @@ async function runAgentLoop(prompt: string, policy: CallPolicy, resume?: ResumeS
         timestamp:       new Date().toISOString(),
         tool:            'run_deepseek_task',
         summary:         finalSummary.slice(0, 140).replace(/\n/g, ' '),
-        model:           MODEL,
+        model:           policy.model,
         inputTokens:     totalInputTokens,
         outputTokens:    totalOutputTokens,
-        deepseekCostUsd: calcCost(MODEL, totalInputTokens, totalOutputTokens),
+        deepseekCostUsd: calcCost(policy.model, totalInputTokens, totalOutputTokens),
     });
 
     return {
@@ -884,6 +903,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                             `Hard cap on tool-call iterations (default: ${LIMITS.maxIterations}, max: ${LIMITS.maxIterations}). ` +
                             'Context condensation runs automatically when the context window fills — tasks run to completion without hitting this limit under normal conditions. ' +
                             'Only lower this if you want a deliberate early stop.'
+                    },
+                    model: {
+                        type: 'string',
+                        enum: ['flash', 'pro'],
+                        description:
+                            `Request a specific model for this task. "flash" = deepseek-v4-flash (fast, cheap). "pro" = deepseek-v4-pro (higher accuracy, ~8× cost). ` +
+                            `Automatic model switching is currently set to: ${MODEL_AUTO}. ` +
+                            (MODEL_AUTO === 'no'  ? 'Model is fixed — this parameter is ignored.' :
+                             MODEL_AUTO === 'ask' ? 'User will be prompted to approve a model switch.' :
+                                                    'You may switch freely — pick the model that fits the task.')
                     }
                 },
                 required: []
@@ -947,12 +976,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         if (!prompt && !resume) throw new Error('prompt must be a non-empty string');
 
-        const rawMaxIter = typeof a['maxIterations'] === 'number' ? Math.floor(a['maxIterations'] as number) : undefined;
+        const rawMaxIter     = typeof a['maxIterations'] === 'number' ? Math.floor(a['maxIterations'] as number) : undefined;
+        const requestedModel = typeof a['model'] === 'string' ? (a['model'] as string) : undefined;
+        // For resume, keep the original model unless the caller explicitly overrides.
+        const effectiveModel = requestedModel
+            ? await resolveModel(requestedModel)
+            : (resume?.policy.model ?? MODEL);
         const policy: CallPolicy = {
             posture:       clampPosture(a['posture'] ?? resume?.policy.posture),
             writePaths:    Array.isArray(a['writePaths']) ? (a['writePaths'] as string[]) : (resume?.policy.writePaths ?? null),
             dryRun:        a['dryRun'] !== undefined ? a['dryRun'] === true : (resume?.policy.dryRun ?? false),
             maxIterations: Math.max(1, Math.min(rawMaxIter ?? resume?.policy.maxIterations ?? LIMITS.maxIterations, LIMITS.maxIterations)),
+            model:         effectiveModel,
         };
 
         // Clear any stale kill signal left over from a previous task.
@@ -979,7 +1014,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (result.skipped.length)   manifestObj['skipped']  = result.skipped;
         if (result.proposed.length)  manifestObj['proposed'] = result.proposed;
 
-        const header = `[DeepSeek Bridge v${EXTENSION_VERSION} | model: ${MODEL}]`;
+        const header = `[DeepSeek Bridge v${EXTENSION_VERSION} | model: ${policy.model}]`;
         const text = Object.keys(manifestObj).length
             ? header + '\n' + JSON.stringify(manifestObj, null, 2) + '\n\n' + result.summary
             : header + '\n' + result.summary;

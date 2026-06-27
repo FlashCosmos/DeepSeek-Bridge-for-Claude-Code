@@ -70,6 +70,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             type: string;
             apiKey?: string;
             model?: string;
+            modelAuto?: string;
             posture?: string;
             command?: string;
             enabled?: boolean;
@@ -88,12 +89,14 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 const posture       = this.context.globalState.get<string>('deepseek-posture') ?? 'edit';
                 const allowCommands = this.context.globalState.get<string[]>('deepseek-allow-commands') ?? [];
                 const fullPermissions = this.context.globalState.get<boolean>('deepseek-full-permissions') ?? false;
+                const modelAuto     = this.context.globalState.get<string>('deepseek-model-auto') ?? 'no';
                 webviewView.webview.postMessage({
                     type: 'config', apiKey, model, posture, allowCommands,
                     workspaceName,
                     hasWorkspace:     !!workspacePath,
                     workspaceEnabled: workspacePath ? isWorkspaceEnabled(workspacePath) : true,
                     fullPermissions,
+                    modelAuto,
                 });
             }
 
@@ -108,9 +111,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             }
 
             if (msg.type === 'save') {
-                const apiKey  = (msg.apiKey ?? '').trim();
-                const model   = msg.model ?? 'deepseek-v4-flash';
-                const posture = msg.posture === 'read-only' ? 'read-only' : 'edit';
+                const apiKey     = (msg.apiKey ?? '').trim();
+                const model      = msg.model ?? 'deepseek-v4-flash';
+                const posture    = msg.posture === 'read-only' ? 'read-only' : 'edit';
+                const modelAuto  = ['yes', 'no', 'ask'].includes(msg.modelAuto ?? '') ? (msg.modelAuto as string) : 'no';
+                await this.context.globalState.update('deepseek-model-auto', modelAuto);
 
                 // Persist to SecretStorage as a best-effort cache. On headless
                 // remotes without a keyring this can throw or silently no-op, so
@@ -128,7 +133,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                     const fullPermissions = this.context.globalState.get<boolean>('deepseek-full-permissions') ?? false;
                     let saveError = '';
                     try {
-                        writeMcpConfig(this.context, apiKey, model, posture, allowCommands, fullPermissions);
+                        writeMcpConfig(this.context, apiKey, model, posture, allowCommands, fullPermissions, modelAuto);
                     } catch (e) {
                         saveError = (e as Error).message;
                     }
@@ -666,6 +671,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     </div>
 
     <div class="field">
+      <label>Automatic Model Switching</label>
+      <select id="modelAuto">
+        <option value="no">No — always use selected model</option>
+        <option value="ask">Ask — prompt me when Claude wants to switch</option>
+        <option value="yes">Yes — Claude chooses freely</option>
+      </select>
+      <p class="hint" id="modelAutoHint"></p>
+    </div>
+
+    <div class="field">
       <label>Permissions</label>
       <select id="posture">
         <option value="edit">Edit — read &amp; write files (recommended)</option>
@@ -755,9 +770,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 <script nonce="${nonce}">
   const vscode        = acquireVsCodeApi();
   const apiKeyInput   = document.getElementById('apiKey');
-  const modelSelect   = document.getElementById('model');
-  const postureSelect = document.getElementById('posture');
-  const postureHint   = document.getElementById('postureHint');
+  const modelSelect      = document.getElementById('model');
+  const modelAutoSelect  = document.getElementById('modelAuto');
+  const modelAutoHint    = document.getElementById('modelAutoHint');
+  const postureSelect    = document.getElementById('posture');
+  const postureHint      = document.getElementById('postureHint');
   const saveBtn       = document.getElementById('saveBtn');
   const toggleKey     = document.getElementById('toggleKey');
   const statusBar     = document.getElementById('statusBar');
@@ -917,10 +934,12 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     const msg = e.data;
 
     if (msg.type === 'config') {
-      if (msg.apiKey)  apiKeyInput.value   = msg.apiKey;
-      if (msg.model)   modelSelect.value   = msg.model;
-      if (msg.posture) postureSelect.value = msg.posture;
+      if (msg.apiKey)     apiKeyInput.value    = msg.apiKey;
+      if (msg.model)      modelSelect.value    = msg.model;
+      if (msg.posture)    postureSelect.value  = msg.posture;
+      if (msg.modelAuto)  modelAutoSelect.value = msg.modelAuto;
       updatePostureHint();
+      updateModelAutoHint();
       setStatus(!!msg.apiKey, msg.model);
       currentAllowCommands = msg.allowCommands || [];
       renderCommands(currentAllowCommands);
@@ -1092,6 +1111,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   });
 
   postureSelect.addEventListener('change', updatePostureHint);
+  modelAutoSelect.addEventListener('change', updateModelAutoHint);
+
+  function updateModelAutoHint() {
+    const v = modelAutoSelect.value;
+    modelAutoHint.textContent =
+      v === 'yes' ? 'Claude switches between Flash and Pro freely based on task complexity.' :
+      v === 'ask' ? 'Claude will prompt you before switching models — you decide each time.' :
+                    'Model stays on whatever is selected above.';
+  }
+  updateModelAutoHint();
 
   function updatePostureHint() {
     postureHint.textContent = postureSelect.value === 'read-only'
@@ -1101,10 +1130,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
   saveBtn.addEventListener('click', () => {
     vscode.postMessage({
-      type:    'save',
-      apiKey:  apiKeyInput.value.trim(),
-      model:   modelSelect.value,
-      posture: postureSelect.value,
+      type:      'save',
+      apiKey:    apiKeyInput.value.trim(),
+      model:     modelSelect.value,
+      posture:   postureSelect.value,
+      modelAuto: modelAutoSelect.value,
     });
     setStatus(!!apiKeyInput.value.trim(), modelSelect.value);
   });
