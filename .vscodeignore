@@ -1,3 +1,4 @@
+# Source & tooling — not shipped in the extension
 .vscode/**
 .github/**
 src/**
@@ -10,16 +11,18 @@ vitest.config.*
 **/*.ts
 *.vsix
 package-lock.json
-PUBLISHING.md
-CODE-INDEX.md
-DEEPSEEK-MCP-IMPROVEMENTS.md
-TODO.md
+
+# Dev-only docs & local files
+CLAUDE.md
 CONTRIBUTING.md
 SECURITY.md
-CLAUDE.md
+CODE-INDEX.md
+DEEPSEEK-MCP-IMPROVEMENTS.md
+PUBLISHING.md
+TODO.md
 .deepseek-audit.log
-media/logo.jpg
-media/logo2.jpg
+
+# Media: ship the icons + README diagram, not the editable source
+media/architecture.svg
+
 !out/**
-!changelog.md
-!media/architecture.png

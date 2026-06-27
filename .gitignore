@@ -2,5 +2,14 @@ node_modules/
 out/
 *.vsix
 .deepseek-audit.log
+
+# Local dev notes & machine-managed files — kept out of the public repo
+CLAUDE.md
 PUBLISHING.md
 TODO.md
+CODE-INDEX.md
+DEEPSEEK-MCP-IMPROVEMENTS.md
+
+# Unused scratch art
+media/logo.jpg
+media/logo2.jpg
