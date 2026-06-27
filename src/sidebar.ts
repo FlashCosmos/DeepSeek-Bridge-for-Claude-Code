@@ -447,11 +447,14 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     .console-log {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px; line-height: 1.6;
-      overflow-y: auto; max-height: 520px;
+      overflow-y: auto;
+      flex: 1 1 auto; min-height: 120px;
+      height: calc(100vh - 120px);
       background: var(--vscode-terminal-background, rgba(0,0,0,0.15));
       border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.2));
       border-radius: 3px; padding: 8px 10px;
     }
+    #consolePanel { display: flex; flex-direction: column; min-height: 0; }
     .ce { margin-bottom: 1px; word-break: break-all; }
     .ce-ts { opacity: 0.35; font-size: 10px; margin-right: 5px; user-select: none; }
     .ce.task-start { color: #3fb950; font-weight: 600; }
