@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.8
+- **Fix approval scope for Unix/Git Bash tools on Windows** — commands like `wc`, `grep`, `sed`, `awk`, etc. were invisible to `where.exe` so they never appeared as scope options; users were stuck approving the exact command "once" on every invocation. They now show up as "any wc command" / "any grep command" scope options and can be approved for session or always.
+
 ## 1.2.7
 - **Parallel tool execution** — multiple tool calls returned in a single DeepSeek response now run concurrently (`Promise.all`) instead of sequentially, reducing per-iteration latency for file-heavy tasks.
 - **Raised context-condensation threshold** from 65% → 80% of the 1M-token window, avoiding unnecessary extra API round-trips on medium-length tasks.
