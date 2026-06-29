@@ -46,7 +46,7 @@ DeepSeek V4 Flash is roughly **10–100× cheaper** than a frontier model for th
 
 ## Links
 
-[Report an issue](https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/issues) · [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [DeepSeek API keys](https://platform.deepseek.com/api_keys) · [Claude Code](https://claude.com/claude-code)
+[Report an issue](https://github.com/FlashCosmos/DeepSeek-Bridge-for-Claude-Code/issues) · [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [DeepSeek API keys](https://platform.deepseek.com/api_keys) · [Claude Code](https://claude.com/claude-code)
 
 ---
 
