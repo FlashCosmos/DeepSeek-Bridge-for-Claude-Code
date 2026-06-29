@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.11
+- Moved repository to [FlashCosmos/DeepSeek-Bridge-for-Claude-Code](https://github.com/FlashCosmos/DeepSeek-Bridge-for-Claude-Code).
+
 ## 1.2.10
 - **Fix approval scope for all bare executables** — the approval dialog now offers "any \<exe\> command" as a scope option for every command, regardless of whether it's in the Windows PATH. Previously, tools like `wc`, `grep`, `sed` were invisible to `where.exe` so users could only approve the exact command "once" and the dialog kept reappearing. Absolute paths are still excluded (they'd produce useless allowlist entries).
 
