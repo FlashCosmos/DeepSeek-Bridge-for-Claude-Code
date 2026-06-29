@@ -1,7 +1,10 @@
 # Changelog
 
+## 1.2.10
+- **Fix approval scope for all bare executables** — the approval dialog now offers "any \<exe\> command" as a scope option for every command, regardless of whether it's in the Windows PATH. Previously, tools like `wc`, `grep`, `sed` were invisible to `where.exe` so users could only approve the exact command "once" and the dialog kept reappearing. Absolute paths are still excluded (they'd produce useless allowlist entries).
+
 ## 1.2.9
-- **Fix approval scope for Unix/Git Bash tools on Windows** — commands like `wc`, `grep`, `sed`, `awk`, etc. were invisible to `where.exe` so they never appeared as scope options; users were stuck approving the exact command "once" on every invocation. Now falls back to `sh -c "which <exe>"` so any tool available in Git Bash automatically gets a scope option and can be approved for session or always.
+- Superseded by 1.2.10.
 
 ## 1.2.7
 - **Parallel tool execution** — multiple tool calls returned in a single DeepSeek response now run concurrently (`Promise.all`) instead of sequentially, reducing per-iteration latency for file-heavy tasks.

@@ -4,7 +4,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
 import { DeepSeekSidebarProvider } from './sidebar';
 import {
     writeMcpConfig, readExistingMcpKey, readSettings, getInjectTarget,
@@ -58,31 +57,9 @@ const SHELL_BUILTINS = new Set([
 
 const PRIVILEGE_ESCALATORS = new Set(['sudo', 'doas', 'su', 'run', 'env', 'nice', 'ionice', 'nohup', 'xargs']);
 
-function isInPath(exe: string): boolean {
-    if (!exe) return false;
-    if (exe.startsWith('./') || exe.startsWith('../')) return true;
-    if (exe.includes('/') || exe.includes('\\')) return false;
-    if (SHELL_BUILTINS.has(exe.toLowerCase())) return true;
-    const normalized = exe.replace(/\.(exe|cmd|bat|ps1)$/i, '');
-    try {
-        const cmd = process.platform === 'win32' ? `where "${normalized}"` : `which "${normalized}"`;
-        execSync(cmd, { stdio: 'pipe', timeout: 2000 });
-        return true;
-    } catch {
-        // On Windows, where.exe can't find Git Bash tools (wc, grep, sed, etc.).
-        // Fall back to asking sh so any tool available in Git Bash gets a scope option.
-        if (process.platform === 'win32') {
-            try {
-                execSync(`sh -c "which '${normalized}'"`, { stdio: 'pipe', timeout: 2000 });
-                return true;
-            } catch { return false; }
-        }
-        return false;
-    }
-}
-
 function addScopeOption(options: ScopeOption[], seen: Set<string>, exe: string): void {
-    if (!exe || seen.has(exe) || !isInPath(exe)) return;
+    // Skip absolute paths — they'd create allowlist entries that never match anything useful.
+    if (!exe || seen.has(exe) || exe.includes('/') || exe.includes('\\')) return;
     seen.add(exe);
     options.push({
         prefix: exe,
