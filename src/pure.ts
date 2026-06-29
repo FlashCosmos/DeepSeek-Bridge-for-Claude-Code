@@ -104,11 +104,39 @@ export function segmentMatchesEntry(segment: string, entry: string): boolean {
     return segment === entry || segment.startsWith(entry + ' ');
 }
 
-// Split a chained command on unambiguous shell operators. Bare | is intentionally
-// excluded — it appears inside quoted args (powershell -Command "... | Select-String")
-// and does not introduce a new top-level command the way && or ; does.
+// Split a chained command on unambiguous shell operators that appear OUTSIDE of
+// quoted strings. Bare | is excluded — it appears inside quoted args. Semicolons
+// inside single- or double-quoted strings (e.g. php -r '$a=1; $b=2;') are NOT
+// treated as separators, preventing false-negative allowlist mismatches.
 export function splitSegments(command: string): string[] {
-    return command.split(/\s*(?:&&|\|\||;)\s*/).map(s => s.trim()).filter(Boolean);
+    const segments: string[] = [];
+    let current = '';
+    let inSingle = false;
+    let inDouble = false;
+
+    for (let i = 0; i < command.length; i++) {
+        const ch = command[i];
+
+        if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
+        if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
+        if (ch === '\\' && !inSingle && i + 1 < command.length) {
+            current += ch + command[++i]; continue;
+        }
+
+        if (!inSingle && !inDouble) {
+            if ((ch === '&' && command[i + 1] === '&') || (ch === '|' && command[i + 1] === '|')) {
+                const seg = current.trim(); if (seg) segments.push(seg); current = ''; i++; continue;
+            }
+            if (ch === ';') {
+                const seg = current.trim(); if (seg) segments.push(seg); current = ''; continue;
+            }
+        }
+
+        current += ch;
+    }
+
+    const last = current.trim(); if (last) segments.push(last);
+    return segments;
 }
 
 // Every chained segment must match an allowlist entry. Prevents "node good && rm -rf /"
