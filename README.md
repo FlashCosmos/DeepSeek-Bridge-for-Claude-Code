@@ -13,8 +13,6 @@ DeepSeek Bridge connects [Claude Code](https://claude.com/claude-code) to [DeepS
 
 > *Independent project — not affiliated with, endorsed by, or sponsored by Anthropic or DeepSeek.*
 
-![Architecture](media/architecture.png)
-
 ## Setup
 
 1. Install from the Marketplace, then open the ⚡ sidebar (a walkthrough appears on first run).
