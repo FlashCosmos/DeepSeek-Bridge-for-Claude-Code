@@ -58,33 +58,27 @@ const SHELL_BUILTINS = new Set([
 
 const PRIVILEGE_ESCALATORS = new Set(['sudo', 'doas', 'su', 'run', 'env', 'nice', 'ionice', 'nohup', 'xargs']);
 
-// Common POSIX/Unix tools that ship with Git Bash on Windows but are invisible to
-// `where.exe`. Without this list they'd fail isInPath() and never appear as scope
-// options, leaving the user stuck approving the exact command every time.
-const UNIX_TOOLS = new Set([
-    'wc', 'grep', 'egrep', 'fgrep', 'sed', 'awk', 'gawk',
-    'cat', 'head', 'tail', 'tee',
-    'sort', 'uniq', 'cut', 'tr', 'paste',
-    'find', 'xargs', 'diff', 'cmp',
-    'ls', 'rm', 'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
-    'tar', 'gzip', 'gunzip', 'zip', 'unzip',
-    'date', 'sleep', 'timeout', 'basename', 'dirname', 'realpath',
-    'stat', 'du', 'df', 'which',
-    'curl', 'wget', 'ssh', 'scp', 'rsync',
-]);
-
 function isInPath(exe: string): boolean {
     if (!exe) return false;
     if (exe.startsWith('./') || exe.startsWith('../')) return true;
     if (exe.includes('/') || exe.includes('\\')) return false;
     if (SHELL_BUILTINS.has(exe.toLowerCase())) return true;
-    if (UNIX_TOOLS.has(exe.toLowerCase())) return true;
     const normalized = exe.replace(/\.(exe|cmd|bat|ps1)$/i, '');
     try {
         const cmd = process.platform === 'win32' ? `where "${normalized}"` : `which "${normalized}"`;
         execSync(cmd, { stdio: 'pipe', timeout: 2000 });
         return true;
-    } catch { return false; }
+    } catch {
+        // On Windows, where.exe can't find Git Bash tools (wc, grep, sed, etc.).
+        // Fall back to asking sh so any tool available in Git Bash gets a scope option.
+        if (process.platform === 'win32') {
+            try {
+                execSync(`sh -c "which '${normalized}'"`, { stdio: 'pipe', timeout: 2000 });
+                return true;
+            } catch { return false; }
+        }
+        return false;
+    }
 }
 
 function addScopeOption(options: ScopeOption[], seen: Set<string>, exe: string): void {
