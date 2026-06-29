@@ -102,7 +102,7 @@ async function resolveModel(requested: string | undefined, settings: BridgeSetti
 
 // DeepSeek V4 Flash and Pro both ship a 1,048,576-token window by default.
 const CONTEXT_WINDOW = 1_048_576;
-const CONDENSE_AT    = Math.floor(CONTEXT_WINDOW * 0.65);  // ~681K — last-resort safety net
+const CONDENSE_AT    = Math.floor(CONTEXT_WINDOW * 0.80);  // ~838K — last-resort safety net
 
 if (!API_KEY) {
     process.stderr.write('deepseek-bridge: DEEPSEEK_API_KEY is not set\n');
@@ -818,48 +818,56 @@ async function runAgentLoop(
 
         let budgetExceeded = false;
         let madeProgress = false;
-        for (const call of msg.tool_calls) {
+        const toolResults = await Promise.all(msg.tool_calls.map(async (call) => {
             let parsed: Record<string, unknown> = {};
             let parseFailed = false;
             try { parsed = JSON.parse(call.function.arguments) as Record<string, unknown>; } catch { parseFailed = true; }
 
-            postEvent('tool_call', { name: call.function.name, args: parsed });
+            postEvent("tool_call", { name: call.function.name, args: parsed });
 
             if (parseFailed) {
-                // Tell the model exactly what went wrong and DON'T count it as progress,
-                // so a stream of truncated/invalid calls trips the stuck-detector quickly.
-                const result = 'Error: arguments were not valid JSON. Re-emit valid, smaller arguments; for large file content, write in chunks.';
-                postEvent('tool_result', { name: call.function.name, result });
+                const result = "Error: arguments were not valid JSON. Re-emit valid, smaller arguments; for large file content, write in chunks.";
+                postEvent("tool_result", { name: call.function.name, result });
+                return { call, result, parseFailed: true };
+            }
+
+            const sig   = call.function.name + ":" + call.function.arguments;
+            const count = (callCounts.get(sig) ?? 0) + 1;
+            callCounts.set(sig, count);
+            try {
+                if (count > 3) {
+                    const result = "Error: repeated identical tool call suppressed (possible loop)";
+                    postEvent("tool_result", { name: call.function.name, result: result.slice(0, 150) });
+                    return { call, result };
+                } else {
+                    const result = await executeTool(call.function.name, parsed, policy, manifest, originals);
+                    postEvent("tool_result", { name: call.function.name, result: result.slice(0, 150) });
+                    return { call, result, madeProgress: true };
+                }
+            } catch (e) {
+                if ((e as Error).message === "session byte budget exceeded") {
+                    return { call, result: "", budgetExceeded: true };
+                }
+                throw e;
+            }
+        }));
+
+        for (const tr of toolResults) {
+            if (tr.budgetExceeded) { budgetExceeded = true; break; }
+            if (tr.parseFailed) {
                 messages.push({
-                    role: 'tool', tool_call_id: call.id,
-                    content: `<<<UNTRUSTED_TOOL_OUTPUT name="${call.function.name}">>>\n${result}\n<<<END_UNTRUSTED>>>`,
+                    role: "tool", tool_call_id: tr.call.id,
+                    content: `<<UNTRUSTED_TOOL_OUTPUT name="${tr.call.function.name}">>>\n${tr.result}\n<<END_UNTRUSTED>>>`,
                 });
                 continue;
             }
-
-            const sig   = call.function.name + ':' + call.function.arguments;
-            const count = (callCounts.get(sig) ?? 0) + 1;
-            callCounts.set(sig, count);
-            let result: string;
-            try {
-                if (count > 3) {
-                    result = 'Error: repeated identical tool call suppressed (possible loop)';
-                } else {
-                    result = await executeTool(call.function.name, parsed, policy, manifest, originals);
-                    madeProgress = true;
-                }
-            } catch (e) {
-                if ((e as Error).message === 'session byte budget exceeded') { budgetExceeded = true; break; }
-                throw e;
-            }
-            postEvent('tool_result', { name: call.function.name, result: result.slice(0, 150) });
-
-            const safe = cap(result).replace(/<<<+/g, '<<');
+            const safe = cap(tr.result).replace(/<<+/g, "<<");
             messages.push({
-                role:        'tool',
-                tool_call_id: call.id,
-                content:     `<<<UNTRUSTED_TOOL_OUTPUT name="${call.function.name}">>>\n${safe}\n<<<END_UNTRUSTED>>>`
+                role:        "tool",
+                tool_call_id: tr.call.id,
+                content:     `<<UNTRUSTED_TOOL_OUTPUT name="${tr.call.function.name}">>>\n${safe}\n<<END_UNTRUSTED>>>`
             });
+            if (tr.madeProgress) madeProgress = true;
         }
         if (budgetExceeded) break;
 

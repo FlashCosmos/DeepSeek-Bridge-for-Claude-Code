@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.7
+- **Parallel tool execution** — multiple tool calls returned in a single DeepSeek response now run concurrently (`Promise.all`) instead of sequentially, reducing per-iteration latency for file-heavy tasks.
+- **Raised context-condensation threshold** from 65% → 80% of the 1M-token window, avoiding unnecessary extra API round-trips on medium-length tasks.
+
 ## 1.2.4
 - Fixed marketplace badges (shields.io retired its VS Marketplace badges → badgen).
 
