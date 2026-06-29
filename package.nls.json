@@ -8,5 +8,6 @@
   "deepseek-bridge.cmd.stopTask": "Stop Running Task",
   "deepseek-bridge.cmd.toggleWorkspace": "Enable / Disable for This Workspace",
   "deepseek-bridge.cmd.reconnect": "Reconnect Claude Code",
-  "deepseek-bridge.cmd.copyDiagnostics": "Copy Diagnostics"
+  "deepseek-bridge.cmd.copyDiagnostics": "Copy Diagnostics",
+  "deepseek-bridge.cmd.refreshStatus": "Refresh Status"
 }
