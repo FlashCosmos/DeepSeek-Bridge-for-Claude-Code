@@ -29,12 +29,13 @@ Then just ask Claude to do something big. Most settings apply immediately — on
 - **Runs to completion** — context condensation lets big multi-file tasks finish in a single call.
 - **Tight scoping** — per-task `read` / `create-only` / `edit` posture, a `writePaths` allow-list, and dry-run.
 - **Command approval done right** — approve a command Once / this Session / Always; broad "any `<tool>`" scopes are flagged as arbitrary code execution.
+- **Secret file protection** — a built-in blocklist covers `.env`, `.ssh`, `.aws`, keys, `.git`, `*.tfstate`, `*.sqlite`, and more. Add your own patterns (e.g. `**/config.php`, `secrets/**`) individually in the sidebar; pre-populated with common extras like `**/database.yml` and `**/local.settings.json`. Accessing a blocked file prompts you for one-time or permanent permission.
 - **Native VS Code settings** (`deepseekBridge.*`), a live **Console** tab, and a **Cost History** tab with a Claude price comparison.
 - **Built for scale** — multi-window-safe, auto-reconnect prompt on update, authenticated local channel, and an audit log.
 
 ## Security & privacy
 
-DeepSeek runs jailed to your workspace, with a denylist for common secret files (`.env`, `.ssh`, keys, `*.tfstate`, …) and no network tools of its own.
+DeepSeek runs jailed to your workspace with no network tools of its own. A two-layer blocklist protects sensitive files: always-on built-in patterns (`.env`, `.ssh`, `.aws`, keys, `*.tfstate`, `*.sqlite`, …) plus your own custom glob patterns managed individually in the sidebar.
 
 **Your code leaves your machine.** To perform a task, your file contents and prompts are sent to DeepSeek's API (`api.deepseek.com`, operated by DeepSeek, Hangzhou, PRC). You consent once before anything is transmitted — don't use Bridge on code you can't share with a third party. Point `deepseekBridge.baseUrl` at a self-hosted or proxy endpoint if your policy requires it. Details in [SECURITY.md](SECURITY.md).
 

@@ -30,6 +30,16 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         this.webviewView?.webview.postMessage({ type: 'allowCommandsUpdate', commands });
     }
 
+    /** Re-send the custom secret-file deny list + exception list to the webview. */
+    pushSecretPaths(): void {
+        const settings = readSettings();
+        this.webviewView?.webview.postMessage({
+            type: 'secretPathsUpdate',
+            denyPaths: settings.denyPaths,
+            allowSecretPaths: settings.allowSecretPaths,
+        });
+    }
+
     postTaskRunning(running: boolean): void {
         this.webviewView?.webview.postMessage({ type: 'taskRunning', running });
     }
@@ -89,6 +99,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             aggressiveness:   settings.aggressiveness,
             allowCommands:    settings.allowCommands,
             fullPermissions:  settings.fullPermissions,
+            denyPaths:        settings.denyPaths,
+            allowSecretPaths: settings.allowSecretPaths,
             injectGuidance:   getInjectTarget(),
             workspaceName,
             hasWorkspace:     !!workspacePath,
@@ -126,6 +138,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
             posture?: string;
             aggressiveness?: string;
             command?: string;
+            path?: string;
             enabled?: boolean;
         }) => {
             if (msg.type === 'load') {
@@ -220,6 +233,43 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
                 await updateSetting('allowCommands', updated);
                 await this.persist();
                 webviewView.webview.postMessage({ type: 'allowCommandsUpdate', commands: updated });
+            }
+
+            if (msg.type === 'addDenyPath') {
+                const p = (msg.path ?? '').trim();
+                if (!p) return;
+                const existing = readSettings().denyPaths;
+                if (existing.includes(p)) return;
+                const updated = [...existing, p].sort((a, b) => a.localeCompare(b));
+                await updateSetting('denyPaths', updated);
+                await this.persist();
+                this.pushSecretPaths();
+            }
+
+            if (msg.type === 'removeDenyPath') {
+                const p = (msg.path ?? '').trim();
+                const updated = readSettings().denyPaths.filter(x => x !== p);
+                await updateSetting('denyPaths', updated);
+                await this.persist();
+                this.pushSecretPaths();
+            }
+
+            if (msg.type === 'editDenyPath') {
+                const oldP = ((msg as unknown as Record<string, string>)['oldPath'] ?? '').trim();
+                const newP = ((msg as unknown as Record<string, string>)['newPath'] ?? '').trim();
+                if (!newP || oldP === newP) return;
+                const updated = [...readSettings().denyPaths.filter(x => x !== oldP), newP].sort((a, b) => a.localeCompare(b));
+                await updateSetting('denyPaths', updated);
+                await this.persist();
+                this.pushSecretPaths();
+            }
+
+            if (msg.type === 'removeAllowSecretPath') {
+                const p = (msg.path ?? '').trim();
+                const updated = readSettings().allowSecretPaths.filter(x => x !== p);
+                await updateSetting('allowSecretPaths', updated);
+                await this.persist();
+                this.pushSecretPaths();
             }
 
             if (msg.type === 'approvalResponse') {
@@ -694,6 +744,27 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     </div>
 
     <div class="field">
+      <label>Secret Files <span class="ws-sub" style="font-weight:400">— never shared with DeepSeek</span></label>
+      <div class="input-row" style="margin-bottom:6px">
+        <input type="text" id="addDenyInput" placeholder="e.g. secrets/**, **/*.secret, config/prod.json" spellcheck="false" aria-label="Add secret file pattern" />
+        <button class="icon-btn" id="addDenyBtn" title="Add secret pattern" aria-label="Add secret pattern">＋</button>
+      </div>
+      <ul class="cmd-list" id="denyList">
+        <li><p class="cmd-empty">No custom patterns — only the built-in defaults are blocked.</p></li>
+      </ul>
+      <p class="hint" style="margin:4px 0 0">
+        Blocked on top of the always-on built-ins (.env, .ssh, .aws, keys, .git,
+        *.tfstate, *.sqlite — not exhaustive). Workspace-relative globs: <code>*</code>
+        stays in one folder, <code>**</code> spans folders. Reading or writing a blocked
+        file prompts you for permission.
+      </p>
+      <div id="allowSecretWrap" style="display:none;margin-top:8px">
+        <label style="font-size:11px;opacity:0.8">Allowed exceptions <span class="ws-sub" style="font-weight:400">— granted via "Always allow"</span></label>
+        <ul class="cmd-list" id="allowSecretList"></ul>
+      </div>
+    </div>
+
+    <div class="field">
       <label>Auto-approved Commands</label>
       <div class="input-row" style="margin-bottom:6px">
         <input type="text" id="addCmdInput" placeholder="e.g. node, git, npm test" spellcheck="false" aria-label="Add auto-approved command" />
@@ -712,8 +783,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
 
     <p class="info">
       DeepSeek is jailed to this workspace: the agent has no network tools of its
-      own, and a denylist blocks common secret files (.env, .ssh, .aws, keys,
-      .git, *.tfstate, *.sqlite — not exhaustive).
+      own, and a denylist blocks common secret files (plus any you add above).
     </p>
     <p class="privacy">
       <strong>Privacy:</strong> to do its work, your file contents and prompts are
@@ -783,6 +853,11 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   const cmdList       = document.getElementById('cmdList');
   const addCmdInput   = document.getElementById('addCmdInput');
   const addCmdBtn     = document.getElementById('addCmdBtn');
+  const denyList        = document.getElementById('denyList');
+  const addDenyInput    = document.getElementById('addDenyInput');
+  const addDenyBtn      = document.getElementById('addDenyBtn');
+  const allowSecretList = document.getElementById('allowSecretList');
+  const allowSecretWrap = document.getElementById('allowSecretWrap');
 
   const approvalOverlay = document.getElementById('approvalOverlay');
   const approvalCmd     = document.getElementById('approvalCmd');
@@ -858,6 +933,8 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   let currentAllowCommands = [];
+  let currentDenyPaths = [];
+  let currentAllowSecretPaths = [];
 
   vscode.postMessage({ type: 'load' });
 
@@ -946,6 +1023,10 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
       setStatus(!!msg.apiKey, msg.model);
       currentAllowCommands = msg.allowCommands || [];
       renderCommands(currentAllowCommands);
+      currentDenyPaths = msg.denyPaths || [];
+      currentAllowSecretPaths = msg.allowSecretPaths || [];
+      renderDenyPaths(currentDenyPaths);
+      renderAllowSecret(currentAllowSecretPaths);
       fullPermsToggle.checked = !!msg.fullPermissions;
       if (msg.hasWorkspace) {
         wsName.textContent = msg.workspaceName || 'this workspace';
@@ -966,6 +1047,13 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     if (msg.type === 'allowCommandsUpdate') {
       currentAllowCommands = msg.commands || [];
       renderCommands(currentAllowCommands);
+    }
+
+    if (msg.type === 'secretPathsUpdate') {
+      currentDenyPaths = msg.denyPaths || [];
+      currentAllowSecretPaths = msg.allowSecretPaths || [];
+      renderDenyPaths(currentDenyPaths);
+      renderAllowSecret(currentAllowSecretPaths);
     }
 
     if (msg.type === 'approvalRequest') showApproval(msg.command, msg.scopes);
@@ -1070,6 +1158,93 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
   }
   addCmdBtn.addEventListener('click', addCommand);
   addCmdInput.addEventListener('keydown', e => { if (e.key === 'Enter') addCommand(); });
+
+  // ── Secret-file patterns ───────────────────────────────────────────────────
+  function renderDenyPaths(paths) {
+    if (!paths.length) {
+      denyList.innerHTML = '<li><p class="cmd-empty">No custom patterns — only the built-in defaults below are blocked.</p></li>';
+      return;
+    }
+    denyList.innerHTML = paths.map(p => {
+      const safe = esc(p);
+      return \`<li class="cmd-item" data-cmd="\${safe}">
+        <span class="cmd-check">🔒</span>
+        <span class="cmd-text" title="\${safe}">\${safe}</span>
+        <button class="cmd-edit" title="Edit" aria-label="Edit pattern">✏</button>
+        <button class="cmd-del" title="Remove" aria-label="Remove pattern">✕</button>
+      </li>\`;
+    }).join('');
+
+    denyList.querySelectorAll('.cmd-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'removeDenyPath', path: btn.closest('li').dataset.cmd });
+      });
+    });
+
+    denyList.querySelectorAll('.cmd-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const li     = btn.closest('li');
+        const oldP   = li.dataset.cmd;
+        const textEl = li.querySelector('.cmd-text');
+        const input  = document.createElement('input');
+        input.type = 'text'; input.className = 'cmd-edit-input'; input.value = oldP;
+        textEl.replaceWith(input);
+        input.focus(); input.select();
+        btn.style.display = 'none';
+        function commit() {
+          const newP = input.value.trim();
+          if (newP && newP !== oldP) {
+            vscode.postMessage({ type: 'editDenyPath', oldPath: oldP, newPath: newP });
+          } else {
+            const span = document.createElement('span');
+            span.className = 'cmd-text'; span.title = esc(oldP); span.textContent = oldP;
+            input.replaceWith(span); btn.style.display = '';
+          }
+        }
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', e => {
+          if (e.key === 'Enter')  { input.blur(); }
+          if (e.key === 'Escape') {
+            input.removeEventListener('blur', commit);
+            const span = document.createElement('span');
+            span.className = 'cmd-text'; span.title = esc(oldP); span.textContent = oldP;
+            input.replaceWith(span); btn.style.display = '';
+          }
+        });
+      });
+    });
+  }
+
+  function renderAllowSecret(paths) {
+    if (!paths.length) {
+      allowSecretWrap.style.display = 'none';
+      allowSecretList.innerHTML = '';
+      return;
+    }
+    allowSecretWrap.style.display = '';
+    allowSecretList.innerHTML = paths.map(p => {
+      const safe = esc(p);
+      return \`<li class="cmd-item" data-cmd="\${safe}">
+        <span class="cmd-check">🔓</span>
+        <span class="cmd-text" title="\${safe}">\${safe}</span>
+        <button class="cmd-del" title="Remove exception (re-block this file)" aria-label="Remove exception">✕</button>
+      </li>\`;
+    }).join('');
+    allowSecretList.querySelectorAll('.cmd-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'removeAllowSecretPath', path: btn.closest('li').dataset.cmd });
+      });
+    });
+  }
+
+  function addDenyPath() {
+    const p = addDenyInput.value.trim();
+    if (!p) return;
+    vscode.postMessage({ type: 'addDenyPath', path: p });
+    addDenyInput.value = '';
+  }
+  addDenyBtn.addEventListener('click', addDenyPath);
+  addDenyInput.addEventListener('keydown', e => { if (e.key === 'Enter') addDenyPath(); });
 
   const validateCmdsBtn = document.getElementById('validateCmdsBtn');
   let validationResults = null;

@@ -52,13 +52,29 @@ export interface Jail {
     isSensitive(canonical: string): boolean;
 }
 
-export function createJail(rootRaw: string, opts?: { deny?: RegExp[]; auditLog?: string }): Jail {
+export function createJail(rootRaw: string, opts?: {
+    deny?: RegExp[];
+    /** Live user-added deny patterns, re-read on every check (config can change at runtime). */
+    extraDeny?: () => RegExp[];
+    /** Live exception patterns that un-block an otherwise-sensitive path ("Always allow" grants). */
+    allow?: () => RegExp[];
+    auditLog?: string;
+}): Jail {
     let ROOT: string;
     try { ROOT = fs.realpathSync.native(path.resolve(rootRaw)); }
     catch { ROOT = path.resolve(rootRaw); }
 
     const DENY = opts?.deny ?? DEFAULT_DENY;
+    const EXTRA_DENY = opts?.extraDeny ?? (() => []);
+    const ALLOW      = opts?.allow ?? (() => []);
     const AUDIT_LOG = opts?.auditLog ?? path.join(ROOT, '.deepseek-audit.log');
+
+    // Match a path against a regex list, tolerant of Windows back-slashes: user globs
+    // compile to forward-slash patterns, while DEFAULT_DENY handles both separators.
+    function matchesAny(list: RegExp[], rel: string, canonical: string): boolean {
+        const relFwd = rel.replace(/\\/g, '/');
+        return list.some(r => r.test(rel) || r.test(relFwd) || r.test(canonical));
+    }
 
     function jailPath(p: string): string {
         if (typeof p !== 'string' || p.length === 0) throw new Error('empty path');
@@ -109,17 +125,18 @@ export function createJail(rootRaw: string, opts?: { deny?: RegExp[]; auditLog?:
     }
 
     function isSensitive(canonical: string): boolean {
+        // The audit log is never reachable and never exemptible.
         if (canonical === AUDIT_LOG) return true;
         const rel = path.relative(ROOT, canonical);
-        return DENY.some(r => r.test(rel) || r.test(canonical));
+        const blocked = matchesAny(DENY, rel, canonical) || matchesAny(EXTRA_DENY(), rel, canonical);
+        if (!blocked) return false;
+        // An explicit "Always allow" exception un-blocks the path.
+        return !matchesAny(ALLOW(), rel, canonical);
     }
 
     function assertNotSensitive(canonical: string, mode: 'read' | 'write'): void {
         if (canonical === AUDIT_LOG) throw new Error('access to the audit log is blocked');
-        const rel = path.relative(ROOT, canonical);
-        for (const r of DENY) {
-            if (r.test(rel) || r.test(canonical)) throw new Error(`blocked sensitive path (${mode})`);
-        }
+        if (isSensitive(canonical)) throw new Error(`blocked sensitive path (${mode})`);
     }
 
     return { root: ROOT, auditLog: AUDIT_LOG, jailPath, assertNotSensitive, isSensitive };

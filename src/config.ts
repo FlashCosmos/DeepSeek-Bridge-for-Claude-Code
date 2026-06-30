@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import {
     BridgeSettings,
     DEFAULT_SETTINGS,
+    DEFAULT_DENY_PATHS,
     Aggressiveness,
     ModelAuto,
     ServerPosture,
@@ -28,6 +29,8 @@ export function readSettings(): BridgeSettings {
         baseUrl:         c.get<string>('baseUrl', DEFAULT_SETTINGS.baseUrl) || DEFAULT_SETTINGS.baseUrl,
         allowCommands:   c.get<string[]>('allowCommands', []),
         fullPermissions: c.get<boolean>('fullPermissions', false),
+        denyPaths:        c.get<string[]>('denyPaths', []),
+        allowSecretPaths: c.get<string[]>('allowSecretPaths', []),
     };
 }
 
@@ -62,6 +65,20 @@ export async function migrateLegacySettings(context: vscode.ExtensionContext): P
     const fp = context.globalState.get<boolean>('deepseek-full-permissions');
     if (fp) { try { await c.update('fullPermissions', true, vscode.ConfigurationTarget.Global); } catch { /* ignore */ } }
     await context.globalState.update('deepseek-migrated-1.2', true);
+}
+
+/**
+ * One-time seed of the default denyPaths list for users who installed before the
+ * presets were added. Skips if they already have custom patterns saved.
+ */
+export async function seedDefaultDenyPaths(context: vscode.ExtensionContext): Promise<void> {
+    if (context.globalState.get<boolean>('deepseek-seeded-deny-v1')) return;
+    const c = vscode.workspace.getConfiguration('deepseekBridge');
+    const current = c.get<string[]>('denyPaths', []);
+    if (current.length === 0) {
+        try { await c.update('denyPaths', DEFAULT_DENY_PATHS, vscode.ConfigurationTarget.Global); } catch { /* non-fatal */ }
+    }
+    await context.globalState.update('deepseek-seeded-deny-v1', true);
 }
 
 function home(): string {

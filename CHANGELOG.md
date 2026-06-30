@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.14
+- **Secret Files list** — manage your own blocked file patterns individually in the sidebar (add, edit, remove), pre-populated with common extras (`**/config.php`, `**/database.yml`, `**/local.settings.json`, `**/appsettings.Production.json`, `**/.htpasswd`) on top of the always-on built-ins. Use `**/` prefix to match a filename at any depth.
+- Secret Files section moved above Auto-approved Commands in the sidebar.
+
 ## 1.2.11
 - Moved repository to [FlashCosmos/DeepSeek-Bridge-for-Claude-Code](https://github.com/FlashCosmos/DeepSeek-Bridge-for-Claude-Code).
 

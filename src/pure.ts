@@ -24,7 +24,21 @@ export interface BridgeSettings {
     baseUrl:        string;
     allowCommands:  string[];
     fullPermissions: boolean;
+    /** User-added glob patterns to block on TOP of the built-in secret-file defaults. */
+    denyPaths:      string[];
+    /** Glob patterns explicitly EXEMPTED from the blocklist — the "Always allow" grants. */
+    allowSecretPaths: string[];
 }
+
+// User-editable glob patterns shown in the sidebar, applied on top of DEFAULT_DENY.
+// Only covers files NOT already blocked by the always-on DEFAULT_DENY regex list.
+export const DEFAULT_DENY_PATHS: string[] = [
+    '**/.htpasswd',
+    '**/appsettings.Production.json',
+    '**/config.php',
+    '**/database.yml',
+    '**/local.settings.json',
+];
 
 export const DEFAULT_SETTINGS: BridgeSettings = {
     model:           'deepseek-v4-flash',
@@ -34,6 +48,8 @@ export const DEFAULT_SETTINGS: BridgeSettings = {
     baseUrl:         'https://api.deepseek.com',
     allowCommands:   [],
     fullPermissions: false,
+    denyPaths:       DEFAULT_DENY_PATHS,
+    allowSecretPaths: [],
 };
 
 // ── Pricing (per 1M tokens, USD) ────────────────────────────────────────────────
@@ -176,6 +192,22 @@ export function globToRegex(pattern: string): RegExp {
 export function matchesWritePath(relPath: string, patterns: string[]): boolean {
     const normalized = relPath.replace(/\\/g, '/');
     return patterns.some(p => globToRegex(p).test(normalized));
+}
+
+// ── Custom secret-path globs ────────────────────────────────────────────────────
+// Compile a user-entered glob (workspace-relative, forward-slash; e.g. "secrets/**",
+// "*.secret", "config/prod.json", "**/credentials.json") into a RegExp that the jail
+// matches against the relative path. Same engine as writePaths so users learn one
+// dialect: `*` stays within a path segment, `**` spans segments, patterns anchor at
+// the workspace root (use a leading `**/` to match a name at any depth).
+export function compileSecretGlobs(globs: string[]): RegExp[] {
+    const out: RegExp[] = [];
+    for (const raw of globs) {
+        const g = (raw ?? '').trim().replace(/\\/g, '/');
+        if (!g) continue;
+        try { out.push(globToRegex(g)); } catch { /* skip a malformed pattern rather than break the jail */ }
+    }
+    return out;
 }
 
 // ── Argv parsing for shell:false spawn ──────────────────────────────────────────

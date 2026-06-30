@@ -7,7 +7,7 @@ import * as crypto from 'crypto';
 import { DeepSeekSidebarProvider } from './sidebar';
 import {
     writeMcpConfig, readExistingMcpKey, readSettings, getInjectTarget,
-    injectGuidance, writePortFile, removePortFile, migrateLegacySettings, updateSetting,
+    injectGuidance, writePortFile, removePortFile, migrateLegacySettings, seedDefaultDenyPaths, updateSetting,
 } from './config';
 import { isWorkspaceEnabled, setWorkspaceEnabled } from './control';
 import { splitSegments, isScriptableExe, commandMatchesAllowlist, workspaceKey } from './pure';
@@ -107,7 +107,7 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: D
         // (live console + running indicator); leaving them unauthenticated means the
         // UI is never silently dark from a token/key mismatch or an old server still
         // running mid-upgrade. Spoofing them is cosmetic at worst.
-        if (req.method === 'POST' && req.url === '/approve'
+        if (req.method === 'POST' && (req.url === '/approve' || req.url === '/approve-path')
             && (req.headers['x-bridge-token'] ?? '') !== SESSION_TOKEN) {
             res.writeHead(403).end();
             return;
@@ -134,6 +134,31 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: D
                 provider.postConsoleEvent(eventType, data);
             } catch {}
             res.writeHead(200).end();
+            return;
+        }
+
+        if (req.method === 'POST' && req.url === '/approve-path') {
+            let pbody = '';
+            req.on('data', (chunk: Buffer) => { pbody += chunk.toString(); });
+            await new Promise<void>(r => req.on('end', r));
+
+            let relPath = '';
+            let mode: 'read' | 'write' = 'read';
+            try {
+                const parsed = JSON.parse(pbody) as { path?: string; mode?: string };
+                relPath = String(parsed.path ?? '').trim();
+                mode    = parsed.mode === 'write' ? 'write' : 'read';
+            } catch { /* fall through to deny */ }
+
+            if (!relPath) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ decision: 'deny' }));
+                return;
+            }
+
+            const decision = await requestPathAccess(relPath, mode);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ decision }));
             return;
         }
 
@@ -210,6 +235,34 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: D
     });
 }
 
+// Raise a modal asking the user to allow DeepSeek access to a blocked secret file.
+// "Always allow" persists the path into deepseekBridge.allowSecretPaths (the
+// onDidChangeConfiguration handler then rewrites the runtime files + refreshes the UI).
+async function requestPathAccess(relPath: string, mode: 'read' | 'write'): Promise<'allow' | 'deny'> {
+    const verb       = mode === 'write' ? 'write to' : 'read';
+    const ALLOW_ONCE = 'Allow once';
+    const ALWAYS     = 'Always allow';
+    const choice = await vscode.window.showWarningMessage(
+        `Allow DeepSeek to ${verb} "${relPath}"?`,
+        {
+            modal: true,
+            detail: `This file is on the secret-file blocklist because it may contain credentials, so DeepSeek `
+                  + `cannot see it by default. "Always allow" adds it to deepseekBridge.allowSecretPaths; `
+                  + `"Allow once" grants access only for the current session.`,
+        },
+        ALLOW_ONCE, ALWAYS
+    );
+    if (choice === ALWAYS) {
+        const existing = readSettings().allowSecretPaths;
+        if (!existing.includes(relPath)) {
+            const updated = [...existing, relPath].sort((a, b) => a.localeCompare(b));
+            await updateSetting('allowSecretPaths', updated);
+        }
+        return 'allow';
+    }
+    return choice === ALLOW_ONCE ? 'allow' : 'deny';
+}
+
 // Push the full configuration to Claude Code + runtime files + CLAUDE.md guidance.
 // Guidance is only written once a key is configured — otherwise it would reference
 // tools Claude can't see yet.
@@ -225,6 +278,7 @@ function applyConfig(context: vscode.ExtensionContext, apiKey: string | undefine
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     await migrateLegacySettings(context);
+    await seedDefaultDenyPaths(context);
 
     const provider = new DeepSeekSidebarProvider(context);
 

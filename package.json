@@ -2,7 +2,7 @@
   "name": "claude-deepseek-bridge",
   "displayName": "DeepSeek Bridge for Claude Code",
   "description": "Let Claude Code offload token-heavy, file-based chores to DeepSeek — sandboxed, cheaper, you stay in control.",
-  "version": "1.2.13",
+  "version": "1.2.14",
   "publisher": "FlashCosmos",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -202,6 +202,24 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "⚠️ Auto-approve **all** shell commands without prompting. Trusted environments only.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.denyPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["**/.htpasswd", "**/appsettings.Production.json", "**/config.php", "**/database.yml", "**/local.settings.json"],
+          "markdownDescription": "Extra secret/sensitive files DeepSeek (and Claude via the bridge) may **not** read or write — on top of the always-on built-in blocklist (`.env`, `.ssh`, `.aws`, keys, `.git`, `*.tfstate`, `*.sqlite`, …). Workspace-relative glob patterns: `*` stays within a path segment, `**` spans directories. Examples: `secrets/**`, `**/*.secret`, `config/prod.json`. Accessing a blocked file prompts you for permission.",
+          "scope": "machine-overridable"
+        },
+        "deepseekBridge.allowSecretPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Glob patterns **exempted** from the secret-file blocklist (including the built-in defaults). Entries are added automatically when you choose **Always allow** in an access prompt, and can be edited or removed here. Same glob syntax as `#deepseekBridge.denyPaths#`.",
           "scope": "machine-overridable"
         },
         "deepseekBridge.baseUrl": {
