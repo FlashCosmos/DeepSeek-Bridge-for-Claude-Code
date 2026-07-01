@@ -2,7 +2,7 @@
   "name": "claude-deepseek-bridge",
   "displayName": "DeepSeek Bridge for Claude Code",
   "description": "Let Claude Code offload token-heavy, file-based chores to DeepSeek — sandboxed, cheaper, you stay in control.",
-  "version": "1.2.14",
+  "version": "1.2.17",
   "publisher": "FlashCosmos",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -31,12 +31,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge.git"
+    "url": "https://github.com/FlashCosmos/DeepSeek-Bridge-for-Claude-Code.git"
   },
   "bugs": {
-    "url": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge/issues"
+    "url": "https://github.com/FlashCosmos/DeepSeek-Bridge-for-Claude-Code/issues"
   },
-  "homepage": "https://github.com/DamienTheOmen/Claude-to-DeepSeek-Bridge#readme",
+  "homepage": "https://github.com/FlashCosmos/DeepSeek-Bridge-for-Claude-Code#readme",
   "activationEvents": [
     "onStartupFinished"
   ],

@@ -15,6 +15,21 @@ import { splitSegments, isScriptableExe, commandMatchesAllowlist, workspaceKey }
 const CLAUDE_DIR   = path.join(os.homedir(), '.claude');
 const AUDIT_DIR    = path.join(CLAUDE_DIR, 'deepseek-audit');
 
+// Same log file + line format as server.ts's audit() — lets copyDiagnostics show
+// popup events (shown/auto/decision) interleaved with the tool-call log, so it's
+// clear which specific command(s) triggered a live approval prompt.
+function auditApproval(name: string, data: Record<string, unknown>): void {
+    try {
+        fs.mkdirSync(AUDIT_DIR, { recursive: true });
+        const wsKey = workspaceKey(currentWorkspacePath());
+        fs.appendFileSync(
+            path.join(AUDIT_DIR, `${wsKey}.log`),
+            `${new Date().toISOString()}\t${wsKey}\t${name}\t${JSON.stringify(data)}\n`,
+            'utf8'
+        );
+    } catch { /* never let logging break the approval flow */ }
+}
+
 function killFilePath(wsKey: string): string {
     return path.join(CLAUDE_DIR, `deepseek-kill-${wsKey}`);
 }
@@ -175,12 +190,14 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: D
         try { command = (JSON.parse(body) as { command: string }).command; } catch {}
 
         if (isSessionApproved(command)) {
+            auditApproval('approval_auto', { command, reason: 'session-cache' });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'allow', approvedPrefixes: [command] }));
             return;
         }
 
         const scopes = buildScopeOptions(command).map(o => ({ prefix: o.prefix, detail: o.detail, inPath: o.inPath, dangerous: o.dangerous }));
+        auditApproval('approval_shown', { command, scopes: scopes.map(s => s.prefix) });
         await vscode.commands.executeCommand('workbench.view.extension.deepseek-bridge-container');
         provider.setBadge(1);
 
@@ -189,12 +206,14 @@ async function startApprovalServer(context: vscode.ExtensionContext, provider: D
         provider.setBadge(0);
 
         if (!result || !result.approvals.length) {
+            auditApproval('approval_decision', { command, decision: 'deny' });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'deny' }));
             return;
         }
 
         const { approvals } = result;
+        auditApproval('approval_decision', { command, decision: 'allow', approvals });
         const allPrefixes = approvals.map(a => a.scope);
 
         for (const { scope: chosenPrefix, duration: action } of approvals) {

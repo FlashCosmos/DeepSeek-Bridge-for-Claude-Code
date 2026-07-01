@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.17
+- Fix repository links in package.json — Marketplace "Project Details" now points to the correct FlashCosmos repo.
+
+## 1.2.16
+- **Approval status in the task manifest** — each command in a `run_deepseek_task` manifest's `commandsRun` is now tagged `pre-approved` or `prompted`, so the calling agent can see which commands required a live approval click without guessing.
+- **DeepSeek now writes files the reliable way** — the agent system prompt forbids using `run_command` (heredocs, `cat >>`, `sed -i`, `php -r file_put_contents`) to change file content and requires the dedicated `write_file` tool in a single pass per file. Eliminates the write-thrashing/corruption seen when the model fell back to shell heredocs.
+
+## 1.2.15
+- **Audit-log approval popup events** — command approval prompts (shown/auto-approved/decided) are now written to the per-workspace audit log alongside tool calls, including the full raw command and every scope option offered. Makes it possible to see after the fact exactly which command triggered a live approval prompt, and to diagnose malformed multi-segment commands (e.g. stray unquoted `;` or backtick characters) that produce nonsense scope options.
+
 ## 1.2.14
 - **Secret Files list** — manage your own blocked file patterns individually in the sidebar (add, edit, remove), pre-populated with common extras (`**/config.php`, `**/database.yml`, `**/local.settings.json`, `**/appsettings.Production.json`, `**/.htpasswd`) on top of the always-on built-ins. Use `**/` prefix to match a filename at any depth.
 - Secret Files section moved above Auto-approved Commands in the sidebar.
