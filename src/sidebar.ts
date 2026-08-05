@@ -514,6 +514,7 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
     .ce.tokens     { color: #d2a8ff; font-size: 10px; opacity: 0.55; }
     .ce.condensing { color: #e2a730; font-size: 10.5px; }
     .ce.steering   { color: #e2a730; font-size: 10.5px; font-weight: 600; }
+    .ce.stalled    { color: #e2a730; font-size: 10.5px; }
     .ce.task-end   { color: #3fb950; font-weight: 600; border-top: 1px solid rgba(63,185,80,0.25); margin-top: 4px; padding-top: 4px; }
     .ce.task-killed { color: #f14c4c; font-weight: 600; }
     .session-count { font-size: 10.5px; opacity: 0.6; }
@@ -918,6 +919,9 @@ export class DeepSeekSidebarProvider implements vscode.WebviewViewProvider {
         break;
       case 'condensing':
         text = '↻ condensing context (' + Math.round((data.contextTokens||0)/1000) + 'k)…';
+        break;
+      case 'stalled':
+        text = '↺ empty turn — nudging agent to continue (' + data.nudge + '/3)';
         break;
       case 'steering':
         text = (data.level === 'critical' ? '⚠ budget critical' : '⏳ budget check')

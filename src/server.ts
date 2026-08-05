@@ -20,7 +20,7 @@ import {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const EXTENSION_VERSION = '1.2.18';   // keep in sync with package.json
+const EXTENSION_VERSION = '1.2.19';   // keep in sync with package.json
 
 const CLAUDE_DIR       = path.join(os.homedir(), '.claude');
 const SETTINGS_FILE    = path.join(CLAUDE_DIR, 'deepseek-settings.json');
@@ -445,6 +445,7 @@ const LIMITS = {
     sessionByteBudget: 128 * 1024 * 1024,
     maxIterations:     500,
     maxConsecutiveMistakes: 4,
+    maxStallNudges:    3,
     // Kept under maxResultChars so a page of a file is never blind-truncated by
     // cap() — read_file must own its own truncation to be able to describe it.
     readPageChars:     7000,
@@ -934,6 +935,8 @@ async function runAgentLoop(
     let stuck = false;
     let loopError: Error | null = null;
     let consecutiveMistakes = 0;
+    let stallNudges = 0;
+    let iterationsUsed = 0;
     let selfReviewPending = policy.selfReview;
     const iterationCap = Math.min(policy.maxIterations, LIMITS.maxIterations);
 
@@ -947,6 +950,7 @@ async function runAgentLoop(
     let steerStep = 0;
 
     for (let i = 0; i < iterationCap; i++) {
+        iterationsUsed = i + 1;
         if (fs.existsSync(KILL_FILE)) { try { fs.unlinkSync(KILL_FILE); } catch {} throw new Error('__killed__'); }
 
         // Safe to append here: the previous iteration ended by pushing tool results.
@@ -1066,6 +1070,23 @@ async function runAgentLoop(
         messages.push(msg as OpenAI.Chat.ChatCompletionMessageParam);
 
         if (choice.finish_reason === 'stop' || !msg.tool_calls?.length) {
+            // A turn with neither a tool call nor any text is a stall, not a result.
+            // Reasoning models can burn a whole turn inside reasoning_content and
+            // return content:'' — ending the task there throws away completed work
+            // when the model was mid-thought. Nudge it back into action instead.
+            if (!msg.tool_calls?.length && !(msg.content ?? '').trim() && stallNudges < LIMITS.maxStallNudges) {
+                stallNudges++;
+                messages.push({
+                    role: 'user',
+                    content:
+                        'You returned no tool call and no text. Continue the task now: take the next concrete ' +
+                        'action (including any file write the task asked for). If the work is already complete, ' +
+                        'reply with your final summary.',
+                });
+                postEvent('stalled', { iteration: i + 1, nudge: stallNudges });
+                continue;
+            }
+
             // Optional self-review pass: re-verify completeness once before finishing.
             if (selfReviewPending && (manifest.created.length || manifest.modified.length)) {
                 selfReviewPending = false;
@@ -1078,7 +1099,10 @@ async function runAgentLoop(
                 });
                 continue;
             }
-            finalSummary = msg.content ?? '(task completed with no text output)';
+            // `||` not `??`: an empty-string content is just as absent as null, and
+            // letting '' through leaves finalSummary falsy — which the post-loop
+            // reporter then misdiagnoses as an iteration-budget exhaustion.
+            finalSummary = msg.content || '(task completed with no text output)';
             postEvent('response', { content: (msg.content ?? '').slice(0, 200) });
             break;
         }
@@ -1162,12 +1186,17 @@ async function runAgentLoop(
                 coverage: [...readCoverage.entries()],
             });
         } catch { resumeId = undefined; }
-        const iterInfo = `Iterations used: ${iterationCap}/${LIMITS.maxIterations}.`;
+        const iterInfo = `Iterations used: ${iterationsUsed}/${iterationCap}.`;
         const reason = loopError
             ? `Agent stopped: the DeepSeek API call failed (${loopError.message}). Your partial work is preserved.`
             : stuck
             ? `Agent stopped: it repeated the same tool calls ${LIMITS.maxConsecutiveMistakes} times in a row without progress (likely stuck). Adding a steering hint when you resume usually unblocks it.`
-            : `Agent paused: hit the per-call iteration limit (${iterationCap}). ${iterInfo} To grant more headroom, resume with a higher maxIterations (up to ${LIMITS.maxIterations}).`;
+            : iterationsUsed >= iterationCap
+            ? `Agent paused: hit the per-call iteration limit (${iterationCap}). ${iterInfo} To grant more headroom, resume with a higher maxIterations (up to ${LIMITS.maxIterations}).`
+            // Not the budget: the model ended its turn without producing a summary
+            // (e.g. it stalled after ${LIMITS.maxStallNudges} nudges, or the API
+            // returned an empty choice). Say so rather than blaming the cap.
+            : `Agent stopped early without a final summary after ${iterInfo} This is not a budget problem — resuming with a concrete next instruction usually finishes it.`;
         finalSummary = resumeId
             ? `${reason} ${touchedStr}\n\nResume ID: ${resumeId}\nCall run_deepseek_task with { resumeId: "${resumeId}"${loopError ? '' : `, maxIterations: ${Math.min(iterationCap * 2, LIMITS.maxIterations)}`} } to continue exactly where it stopped — same context, no re-reading files.`
             : `${reason} ${touchedStr} Decompose into smaller tasks for reliable completion.`;

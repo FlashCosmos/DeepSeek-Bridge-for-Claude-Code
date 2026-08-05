@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.19
+- **Empty model turns no longer end a task** — reasoning models sometimes spend an entire turn inside `reasoning_content` and return an empty message with no tool call. The agent loop treated that as "finished" and stopped, discarding a task that was often one step from writing its result. It is now recognised as a stall and nudged back into action (up to 3 times).
+- **Honest stop reasons** — a task that ended without a summary was reported as `hit the per-call iteration limit`, and "Iterations used" always printed the *cap* rather than the actual count. A 24-iteration run was reported as `150/150`. Both fixed: the iteration count is real, and budget exhaustion is only claimed when the budget was actually exhausted.
+
 ## 1.2.18
 - **Content search** — DeepSeek gets a new `search_files` tool (regex across the workspace, returning `path:line: text`, with optional path/glob/case filters). Previously it could only list directories and read whole files, so any "where is X / what uses X" question forced it to enumerate the codebase one file at a time and exhaust its iteration budget before it could answer. Build and vendor directories are skipped; the sensitive-file blocklist still applies.
 - **Paged file reads** — `read_file` now takes `offset` and `limit`, and each page reports its own range (`[src/Types.luau — lines 1-183 of 1483]`) plus the exact offset to call next. Files longer than one page were previously cut off at a fixed size with no way to request the rest, leaving the model permanently unable to see past the first few hundred lines.
