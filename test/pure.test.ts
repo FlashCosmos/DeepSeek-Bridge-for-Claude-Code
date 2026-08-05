@@ -6,6 +6,7 @@ import {
     upsertManagedBlock, removeManagedBlock, claudeMdBlock,
     GUIDANCE_BEGIN, GUIDANCE_END, isValidResumeId, isScriptableExe,
     DEEPSEEK_PRICING, CLAUDE_PRICING,
+    mergeRange, isFullyCovered, planPage, splitLines, ReadCoverage,
 } from '../src/pure';
 
 describe('command allowlist', () => {
@@ -162,5 +163,103 @@ describe('resumeId validation', () => {
         expect(isValidResumeId('../etc/passwd')).toBe(false);
         expect(isValidResumeId('ds-resume-../../x')).toBe(false);
         expect(isValidResumeId('random')).toBe(false);
+    });
+});
+
+// ── Paged reads & read coverage ─────────────────────────────────────────────────
+
+const cov = (totalLines: number, ranges: Array<[number, number]> = []): ReadCoverage =>
+    ({ totalLines, ranges });
+
+describe('read coverage', () => {
+    it('merges overlapping and adjacent ranges', () => {
+        expect(mergeRange(cov(100, [[1, 50]]), 51, 100).ranges).toEqual([[1, 100]]);
+        expect(mergeRange(cov(100, [[1, 50]]), 40, 80).ranges).toEqual([[1, 80]]);
+        expect(mergeRange(cov(100, [[1, 50]]), 60, 80).ranges).toEqual([[1, 50], [60, 80]]);
+    });
+
+    it('handles out-of-order paging', () => {
+        let c = cov(90);
+        c = mergeRange(c, 61, 90);
+        c = mergeRange(c, 1, 30);
+        expect(isFullyCovered(c)).toBe(false);
+        c = mergeRange(c, 31, 60);
+        expect(c.ranges).toEqual([[1, 90]]);
+        expect(isFullyCovered(c)).toBe(true);
+    });
+
+    it('only reports full coverage from line 1 to the end', () => {
+        expect(isFullyCovered(undefined)).toBe(false);
+        expect(isFullyCovered(cov(100))).toBe(false);
+        expect(isFullyCovered(cov(100, [[1, 99]]))).toBe(false);   // tail unread
+        expect(isFullyCovered(cov(100, [[2, 100]]))).toBe(false);  // head unread
+        expect(isFullyCovered(cov(100, [[1, 100]]))).toBe(true);
+    });
+
+    it('a stale range does not cover a file that grew', () => {
+        // File was read fully at 50 lines, then rewritten longer: must not count.
+        const grown = { ...cov(120, [[1, 50]]) };
+        expect(isFullyCovered(grown)).toBe(false);
+    });
+});
+
+describe('planPage', () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
+
+    it('numbers lines 1-based and reports the range', () => {
+        const p = planPage(lines, 1, Infinity, 10_000);
+        expect(p.from).toBe(1);
+        expect(p.to).toBe(10);
+        expect(p.body.split('\n')[0]).toBe('1\tline 1');
+        expect(p.body.split('\n')[9]).toBe('10\tline 10');
+    });
+
+    it('respects an explicit limit', () => {
+        const p = planPage(lines, 3, 2, 10_000);
+        expect([p.from, p.to]).toEqual([3, 4]);
+        expect(p.body).toBe('3\tline 3\n4\tline 4');
+    });
+
+    it('stops at the char budget so the page is never blind-truncated', () => {
+        const p = planPage(lines, 1, Infinity, 20);
+        expect(p.to).toBeLessThan(10);
+        expect(p.body.length).toBeLessThanOrEqual(20);
+    });
+
+    it('always emits at least one line, even an oversized one', () => {
+        const p = planPage(['x'.repeat(500)], 1, Infinity, 10);
+        expect(p.to).toBe(1);
+        expect(p.body).toContain('x');
+    });
+
+    it('clamps an out-of-range offset instead of returning nothing', () => {
+        expect(planPage(lines, 99, Infinity, 10_000).from).toBe(10);
+        expect(planPage(lines, 0, Infinity, 10_000).from).toBe(1);
+        expect(planPage(lines, -5, Infinity, 10_000).from).toBe(1);
+    });
+
+    it('paging start-to-end covers every line exactly once', () => {
+        const big = Array.from({ length: 200 }, (_, i) => `content of line ${i + 1}`);
+        let c = cov(big.length);
+        let next = 1;
+        for (let guard = 0; guard < 50 && next <= big.length; guard++) {
+            const p = planPage(big, next, Infinity, 200);
+            c = mergeRange(c, p.from, p.to);
+            next = p.to + 1;
+        }
+        expect(isFullyCovered(c)).toBe(true);
+    });
+
+    it('handles an empty file', () => {
+        expect(planPage([], 1, Infinity, 100)).toEqual({ from: 1, to: 0, body: '' });
+    });
+});
+
+describe('splitLines', () => {
+    it('drops only the phantom line from a trailing newline', () => {
+        expect(splitLines('a\nb\n')).toEqual(['a', 'b']);
+        expect(splitLines('a\nb')).toEqual(['a', 'b']);
+        expect(splitLines('a\n\n')).toEqual(['a', '']);
+        expect(splitLines('')).toEqual(['']);
     });
 });

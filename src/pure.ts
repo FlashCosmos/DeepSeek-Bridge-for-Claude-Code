@@ -178,6 +178,71 @@ export function isScriptableExe(exe: string): boolean {
     return SCRIPTABLE_EXES.has(exe.replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase());
 }
 
+// ── Paged reads & read coverage ─────────────────────────────────────────────────
+// A long file is handed to the agent one page at a time, so we track which line
+// ranges it has actually seen. write_file replaces a whole file, so it consults
+// this to refuse overwriting a file that was only partly read — without it, a
+// truncated read silently becomes a truncating write.
+
+export interface ReadCoverage { totalLines: number; ranges: Array<[number, number]>; }
+
+/** Add [from,to] to a coverage record, merging touching/overlapping ranges. */
+export function mergeRange(cov: ReadCoverage, from: number, to: number): ReadCoverage {
+    const sorted = [...cov.ranges, [from, to] as [number, number]].sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [];
+    for (const r of sorted) {
+        const last = merged[merged.length - 1];
+        // `+ 1` so adjacent pages (1-50 then 51-100) count as continuous.
+        if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+        else merged.push([r[0], r[1]]);
+    }
+    return { totalLines: cov.totalLines, ranges: merged };
+}
+
+/** True only when line 1 through totalLines is covered by one contiguous span. */
+export function isFullyCovered(cov: ReadCoverage | undefined): boolean {
+    const first = cov?.ranges[0];
+    return !!cov && !!first && first[0] <= 1 && first[1] >= cov.totalLines;
+}
+
+/**
+ * Slice one page of numbered lines that fits inside `budgetChars`. The page must
+ * bound itself: an oversized result would be blind-truncated further downstream,
+ * leaving the agent no way to ask for the remainder.
+ */
+export function planPage(
+    lines: string[],
+    offset: number,
+    limit: number,
+    budgetChars: number
+): { from: number; to: number; body: string } {
+    const total = lines.length;
+    if (!total) return { from: 1, to: 0, body: '' };
+
+    const from = Math.min(Math.max(Number.isFinite(offset) ? Math.floor(offset) : 1, 1), total);
+    const max  = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : Infinity;
+
+    const out: string[] = [];
+    let used = 0;
+    let to   = from - 1;
+    for (let n = from; n <= total && out.length < max; n++) {
+        const rendered = `${n}\t${lines[n - 1]}`;
+        // Always emit at least one line, even if that single line blows the budget.
+        if (out.length && used + rendered.length + 1 > budgetChars) break;
+        out.push(rendered);
+        used += rendered.length + 1;
+        to = n;
+    }
+    return { from, to, body: out.join('\n') };
+}
+
+/** Split file text into lines, dropping the phantom entry after a trailing newline. */
+export function splitLines(text: string): string[] {
+    const lines = text.split('\n');
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+}
+
 // ── writePaths glob matching ────────────────────────────────────────────────────
 
 export function globToRegex(pattern: string): RegExp {
@@ -349,14 +414,23 @@ export function delegationPolicy(agg: Aggressiveness): string {
         `You have a DeepSeek Bridge available via the \`run_deepseek_task\` and \`ask_deepseek\` MCP tools. ` +
         `DeepSeek runs token-heavy work on a far cheaper model so you spend fewer of your own tokens.`,
         ``,
-        `${p.verb} to \`run_deepseek_task\` instead of doing the work yourself whenever a chore involves:`,
-        `- reading or editing ${p.fileThreshold}+ files, or any file over ~${p.lineThreshold} lines;`,
-        `- multi-file refactors, large code generation, or mechanical edits across a codebase;`,
-        `- summarizing, analyzing, or indexing large files or many files at once.`,
+        `Delegate on the SHAPE of the work, not just its size. ${p.verb} to \`run_deepseek_task\` when the work is ` +
+        `bulk execution — the files are already identified, or the change is mechanical enough to specify in the prompt:`,
+        `- applying a known transform across ${p.fileThreshold}+ files, or rewriting/generating a file over ~${p.lineThreshold} lines;`,
+        `- multi-file refactors, large code generation, boilerplate, and repetitive edits;`,
+        `- summarizing, analyzing, or indexing files you can name up front.`,
+        ``,
+        `Do the work YOURSELF when it is open-ended discovery or judgment:`,
+        `- "find everything that assumes X" / "why is this breaking" — questions whose answer set is unknown;`,
+        `- tracing behaviour across a codebase, or any task where you can't say up front which files matter;`,
+        `- small surgical edits, architectural decisions, and final review of what came back.`,
+        ``,
+        `A good delegated prompt names its targets and its transform. If you can't write one without exploring first, ` +
+        `explore yourself, then delegate the execution.`,
         ``,
         `Use \`ask_deepseek\` for self-contained, token-heavy reasoning or explanations where no file access is needed.`,
-        `Keep small, surgical, single-file edits and final review/verification in your own context.`,
         `When you delegate, scope the task with \`posture\` and \`writePaths\`, then review the returned diff/manifest rather than re-reading whole files.`,
+        `If a task comes back having spent its whole iteration budget without a result, don't just resume it — the scope was too open-ended. Narrow it or take it back.`,
     ].join('\n');
 }
 
@@ -364,8 +438,11 @@ export function delegationPolicy(agg: Aggressiveness): string {
 export function mcpInstructions(agg: Aggressiveness): string {
     const p = AGG_PROFILES[agg] ?? AGG_PROFILES.balanced;
     return `This server bridges heavy work to DeepSeek to conserve your tokens. ${p.verb} ` +
-        `to run_deepseek_task for chores touching ${p.fileThreshold}+ files, files over ~${p.lineThreshold} lines, ` +
-        `multi-file refactors, large codegen, or large-file analysis — instead of reading/editing those files yourself. ` +
+        `to run_deepseek_task for BULK EXECUTION where the targets are already known: applying a transform across ` +
+        `${p.fileThreshold}+ files, rewriting/generating files over ~${p.lineThreshold} lines, multi-file refactors, ` +
+        `large codegen, or analysing files you can name up front — instead of doing those edits yourself. ` +
+        `Keep open-ended discovery ("find everything that assumes X", "why does this break") in your own context: ` +
+        `if you can't name the target files and the change without exploring first, explore yourself, then delegate the execution. ` +
         `Use ask_deepseek for self-contained token-heavy reasoning. Keep small single-file edits and final review in your own context.`;
 }
 

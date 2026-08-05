@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.18
+- **Content search** — DeepSeek gets a new `search_files` tool (regex across the workspace, returning `path:line: text`, with optional path/glob/case filters). Previously it could only list directories and read whole files, so any "where is X / what uses X" question forced it to enumerate the codebase one file at a time and exhaust its iteration budget before it could answer. Build and vendor directories are skipped; the sensitive-file blocklist still applies.
+- **Paged file reads** — `read_file` now takes `offset` and `limit`, and each page reports its own range (`[src/Types.luau — lines 1-183 of 1483]`) plus the exact offset to call next. Files longer than one page were previously cut off at a fixed size with no way to request the rest, leaving the model permanently unable to see past the first few hundred lines.
+- **Truncated reads can no longer become truncating writes** — the bridge tracks which line ranges of each file the model has actually been shown, and `write_file` refuses to overwrite a file that was only partly read, naming the lines still missing. Because a write replaces the whole file, a half-read file could previously be written back as a reconstruction of the visible part, silently dropping the rest. Deliberate whole-file replacement is still available via `overwriteUnread: true`; coverage is carried across resumes.
+- **Budget-aware steering** — a task that is still exploring at 60% of its iteration budget is told to narrow down, and at 85% is told to stop and summarise. Runs that hit the cap now return a partial report instead of nothing at all. Visible in the Console tab.
+- **Retuned delegation policy** — the managed `CLAUDE.md` block and MCP instructions now trigger on the *shape* of the work rather than raw file count: delegate bulk execution against known targets, keep open-ended discovery ("find everything that assumes X") in Claude's own context. Delegating discovery was the case that produced empty, budget-exhausted runs.
+
 ## 1.2.17
 - Fix repository links in package.json — Marketplace "Project Details" now points to the correct FlashCosmos repo.
 
